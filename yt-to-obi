@@ -1,0 +1,91 @@
+#!/bin/bash
+# yt-to-obi - Scrape a YouTube video into Obsidian
+# Usage: yt-to-obi <youtube-url> [category]
+set -euo pipefail
+
+URL="${1:?Usage: yt-to-obi <youtube-url> [category]}"
+CATEGORY="${2:-sources}"
+VAULT="/mnt/obsidian-vault"
+VENV="/opt/scraper-venv"
+
+# Extract video ID
+VID=$(echo "$URL" | grep -oP '(?<=v=|/v/|youtu\.be/|/shorts/)[a-zA-Z0-9_-]{11}' | head -1)
+if [ -z "$VID" ]; then
+    echo "Could not extract video ID from: $URL"
+    exit 1
+fi
+
+# Get metadata
+META=$("$VENV/bin/yt-dlp" --skip-download --print-json "$URL" 2>/dev/null)
+
+TITLE=$(echo "$META" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('title','Untitled'))" 2>/dev/null)
+CHANNEL=$(echo "$META" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('channel','Unknown'))" 2>/dev/null)
+DATE=$(echo "$META" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('upload_date',''))" 2>/dev/null)
+DURATION=$(echo "$META" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('duration_string',''))" 2>/dev/null)
+VIEWS=$(echo "$META" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('view_count',0))" 2>/dev/null)
+DESC=$(echo "$META" | python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('description') or '')[:2000])" 2>/dev/null || echo "")
+
+# Format date
+if [ ${#DATE} -eq 8 ]; then
+    FORMATTED_DATE="${DATE:0:4}-${DATE:4:2}-${DATE:6:2}"
+else
+    FORMATTED_DATE="unknown-date"
+fi
+
+# Get transcript
+TRANSCRIPT=$("$VENV/bin/python3" -c '
+from youtube_transcript_api import YouTubeTranscriptApi
+api = YouTubeTranscriptApi()
+try:
+    t = api.fetch("'"$VID"'", languages=["en"])
+    for s in t:
+        ts = int(s.start)
+        mins = ts // 60
+        secs = ts % 60
+        print(f"{mins:02d}:{secs:02d} {s.text}")
+except:
+    print("_No transcript available_")
+' 2>/dev/null) || TRANSCRIPT="_Transcript fetch failed_"
+
+# Slugify title
+SLUG=$(echo "$TITLE" | python3 -c '
+import sys, re
+t = sys.stdin.read().strip().lower()
+t = re.sub(r"[^a-z0-9]+", "-", t).strip("-")
+print(t[:80] or "untitled")
+')
+
+FILENAME="${FORMATTED_DATE}-${SLUG}.md"
+OUTDIR="$VAULT/$CATEGORY/youtube"
+mkdir -p "$OUTDIR"
+OUTFILE="$OUTDIR/$FILENAME"
+
+cat > "$OUTFILE" << NOTE
+---
+title: "$TITLE"
+source: youtube
+url: "$URL"
+channel: "$CHANNEL"
+date: "$FORMATTED_DATE"
+duration: "$DURATION"
+views: "$VIEWS"
+---
+
+# $TITLE
+
+**Channel:** $CHANNEL
+**Date:** $FORMATTED_DATE
+**Duration:** $DURATION
+**Views:** $VIEWS
+**URL:** [$URL]($URL)
+
+## Description
+
+$DESC
+
+## Transcript
+
+$TRANSCRIPT
+NOTE
+
+echo "Written: $OUTFILE"
