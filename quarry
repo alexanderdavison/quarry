@@ -166,6 +166,8 @@ def write_vault_note(title: str, channel: str, url: str, date: str,
     # Format transcript or error message
     transcript_section = transcript_text if transcript_text else "_No transcript available_"
 
+    if outfile.exists():
+        outfile.unlink()
     with open(outfile, "w") as f:
         f.write("---\n")
         f.write(f'title: "{title}"\n')
