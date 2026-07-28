@@ -72,20 +72,29 @@ def format_date(raw: str) -> str:
 
 
 def one_liner(description: str, title: str, transcript: str) -> str:
-    """Generate a one-sentence summary from available text."""
-    # Try first meaningful sentence from description
+    """Generate a one-sentence summary from the transcript."""
+    # Use first meaningful line from transcript (skip timestamp header)
+    if transcript and transcript != "_Transcript unavailable_":
+        for line in transcript.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Strip leading timestamp (MM:SS or H:MM:SS)
+            clean = line
+            import re
+            m = re.match(r'\d{1,2}:\d{2}(:\d{2})?\s+', clean)
+            if m:
+                clean = clean[m.end():]
+            if clean and len(clean) > 15 and not clean.startswith(('http', 'www.', '@', '#')):
+                return clean[:120] + ("..." if len(clean) > 120 else "")
+    # Fallback to first clean sentence from description
     if description:
-        # Split on sentence boundaries, take first non-empty
-        for sep in ['. ', '.\n', '!\n', '?\n']:
+        for sep in ['. ', '.\n']:
             if sep in description:
                 candidate = description.split(sep)[0].strip()
-                if candidate and len(candidate) > 20:
+                if candidate and len(candidate) > 20 and not candidate.startswith('http'):
                     return candidate + "."
-        # Fallback: first 120 chars of description
-        clean = description[:120].strip()
-        if clean:
-            return clean + ("..." if len(description) > 120 else "")
-    # Last resort: use the title
+    # Last resort
     return title
 
 
@@ -161,7 +170,7 @@ def write_vault_note(title: str, channel: str, url: str, date: str,
     outfile = outdir / filename
 
     # Truncate description for the note (keep full in transcript section below)
-    desc_short = (description or "")[:2000]
+    desc_short = (description or "")[:500]
 
     # Format transcript or error message
     transcript_section = transcript_text if transcript_text else "_No transcript available_"
@@ -185,7 +194,7 @@ def write_vault_note(title: str, channel: str, url: str, date: str,
         f.write(f"**Views:** {views:,}  \n")
         f.write(f"**URL:** [{url}]({url})\n\n")
         f.write("## Description\n\n")
-        f.write(f"{desc_short}\n\n")
+        f.write(f"{desc_short[:500]}\n\n")
         f.write("## Transcript\n\n")
         f.write(transcript_section)
         f.write("\n")
