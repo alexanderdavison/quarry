@@ -1,0 +1,354 @@
+#!/opt/scraper-venv/bin/python3
+"""
+quarry: Scrape YouTube videos into the Obsidian vault + seed Honcho memory.
+
+Usage:
+    quarry <youtube-url> [category]
+
+Categories map to vault subdirectories and Honcho workspaces:
+    sources, shared, homelab-wiki, personal-wiki  →  hermes (homelab)
+    real-estate                                    →  hermes_real-estate
+    dental-msp                                     →  hermes_dental-msp
+    axiom-music                                    →  hermes_axiom-music
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+# ── Configuration ────────────────────────────────────────────────────────────
+
+VAULT = "/mnt/obsidian-vault"
+VENV = "/opt/scraper-venv"
+RECENT_FILE = "/opt/quarry/recent.json"
+HONCHO_BASE = "http://192.168.1.23:8000"
+HONCHO_API_KEY = os.environ.get("HONCHO_API_KEY", "")
+
+CATEGORY_WORKSPACE_MAP = {
+    "sources":         "hermes",
+    "shared":          "hermes",
+    "homelab-wiki":    "hermes",
+    "personal-wiki":   "hermes",
+    "real-estate":     "hermes_real-estate",
+    "dental-msp":      "hermes_dental-msp",
+    "axiom-music":     "hermes_axiom-music",
+}
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def die(msg: str, code: int = 1) -> None:
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def extract_video_id(url: str) -> str | None:
+    patterns = [
+        r'(?:v=|/v/|youtu\.be/|shorts/|embed/|live/)([a-zA-Z0-9_-]{11})',
+        r'^([a-zA-Z0-9_-]{11})$',
+    ]
+    for p in patterns:
+        m = re.search(p, url)
+        if m:
+            return m.group(1)
+    return None
+
+
+def slugify(text: str) -> str:
+    slug = re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')
+    return slug[:80] or "untitled"
+
+
+def format_date(raw: str) -> str:
+    if len(raw) == 8:
+        return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def one_liner(description: str, title: str, transcript: str) -> str:
+    """Generate a one-sentence summary from available text."""
+    # Try first meaningful sentence from description
+    if description:
+        # Split on sentence boundaries, take first non-empty
+        for sep in ['. ', '.\n', '!\n', '?\n']:
+            if sep in description:
+                candidate = description.split(sep)[0].strip()
+                if candidate and len(candidate) > 20:
+                    return candidate + "."
+        # Fallback: first 120 chars of description
+        clean = description[:120].strip()
+        if clean:
+            return clean + ("..." if len(description) > 120 else "")
+    # Last resort: use the title
+    return title
+
+
+# ── Pipeline stages ──────────────────────────────────────────────────────────
+
+def get_metadata(url: str) -> dict:
+    """Fetch video metadata via yt-dlp."""
+    try:
+        result = subprocess.run(
+            [f"{VENV}/bin/yt-dlp", "--skip-download", "--print-json", "--no-warnings", url],
+            capture_output=True, text=True, timeout=90,
+        )
+    except FileNotFoundError:
+        die(f"yt-dlp not found at {VENV}/bin/yt-dlp. Is the venv set up?")
+    except subprocess.TimeoutExpired:
+        die("yt-dlp timed out after 90 seconds.")
+
+    if result.returncode != 0:
+        err = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+        die(f"yt-dlp failed: {err}")
+
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        die(f"Failed to parse yt-dlp output: {e}\nOutput was: {result.stdout[:500]}")
+
+
+def fetch_transcript(video_id: str) -> tuple[list[str] | None, str | None]:
+    """Fetch English transcript. Returns (lines_with_timestamps, error)."""
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+    except ImportError:
+        return None, "youtube-transcript-api not installed in venv"
+
+    api = YouTubeTranscriptApi()
+    languages = ["en"]
+    last_error = None
+
+    for lang_set in [languages, None]:
+        try:
+            if lang_set:
+                segments = api.fetch(video_id, languages=lang_set)
+            else:
+                segments = api.fetch(video_id)
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+        lines = []
+        for seg in segments:
+            ts = int(seg.start)
+            m, s = divmod(ts, 60)
+            h = 0
+            if ts >= 3600:
+                h, m = divmod(ts, 3600)
+                m, s = divmod(m, 60)
+                lines.append(f"{h}:{m:02d}:{s:02d} {seg.text}")
+            else:
+                lines.append(f"{m:02d}:{s:02d} {seg.text}")
+        return lines, None
+
+    return None, last_error or "No transcript available"
+
+
+def write_vault_note(title: str, channel: str, url: str, date: str,
+                     duration: str, views: int, description: str,
+                     transcript_text: str, category: str) -> Path:
+    """Write a markdown note to the vault."""
+    outdir = Path(VAULT) / category / "youtube"
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"{date}-{slugify(title)}.md"
+    outfile = outdir / filename
+
+    # Truncate description for the note (keep full in transcript section below)
+    desc_short = (description or "")[:2000]
+
+    # Format transcript or error message
+    transcript_section = transcript_text if transcript_text else "_No transcript available_"
+
+    with open(outfile, "w") as f:
+        f.write("---\n")
+        f.write(f'title: "{title}"\n')
+        f.write("source: youtube\n")
+        f.write(f'url: "{url}"\n')
+        f.write(f'channel: "{channel}"\n')
+        f.write(f'date: "{date}"\n')
+        f.write(f'duration: "{duration}"\n')
+        f.write(f"views: {views}\n")
+        f.write("---\n\n")
+        f.write(f"# {title}\n\n")
+        f.write(f"**Channel:** {channel}  \n")
+        f.write(f"**Date:** {date}  \n")
+        f.write(f"**Duration:** {duration}  \n")
+        f.write(f"**Views:** {views:,}  \n")
+        f.write(f"**URL:** [{url}]({url})\n\n")
+        f.write("## Description\n\n")
+        f.write(f"{desc_short}\n\n")
+        f.write("## Transcript\n\n")
+        f.write(transcript_section)
+        f.write("\n")
+
+    # Fix ownership
+    subprocess.run(["chown", "wyandotte:wyandotte", str(outfile)], capture_output=True)
+    subprocess.run(["chmod", "644", str(outfile)], capture_output=True)
+
+    return outfile
+
+
+def seed_honcho(workspace: str, title: str, channel: str, url: str,
+                category: str, vault_relpath: str, one_sentence: str) -> None:
+    """Write a compact conclusion to Honcho for future Hermes recall."""
+    if not HONCHO_API_KEY:
+        return  # No key configured — skip
+
+    conclusion = (
+        f"Scraped YouTube video into vault. "
+        f"Title: {title}. "
+        f"Channel: {channel}. "
+        f"Category: {category}. "
+        f"Vault: {vault_relpath}. "
+        f"Summary: {one_sentence}"
+    )
+
+    payload = {
+        "peer": "ishmael",
+        "conclusion": conclusion,
+    }
+
+    try:
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(
+            f"{HONCHO_BASE}/v3/workspaces/{workspace}/conclude",
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "X-API-Key": HONCHO_API_KEY,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status not in (200, 201):
+                print(f"  [honcho] warning: HTTP {resp.status}", file=sys.stderr)
+    except Exception as e:
+        print(f"  [honcho] warning: could not seed memory: {e}", file=sys.stderr)
+
+
+def update_recent(title: str, channel: str, category: str,
+                  vault_path: str, one_sentence: str) -> None:
+    """Append to the recent scrapes log."""
+    recent = []
+    recent_file = Path(RECENT_FILE)
+    if recent_file.exists():
+        try:
+            with open(recent_file) as f:
+                recent = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            recent = []
+
+    recent.insert(0, {
+        "title": title,
+        "channel": channel,
+        "category": category,
+        "path": vault_path,
+        "summary": one_sentence,
+        "timestamp": time.time(),
+    })
+
+    # Keep last 50
+    recent = recent[:50]
+
+    recent_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(recent_file, "w") as f:
+        json.dump(recent, f, indent=2)
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        die("Usage: quarry <youtube-url> [category]")
+
+    url = sys.argv[1].strip()
+    category = sys.argv[2].strip() if len(sys.argv) > 2 else "sources"
+
+    # Validate category
+    if category not in CATEGORY_WORKSPACE_MAP:
+        valid = ", ".join(sorted(CATEGORY_WORKSPACE_MAP))
+        die(f"Unknown category '{category}'. Valid: {valid}")
+
+    # ── Step 1: Extract video ID ──
+    video_id = extract_video_id(url)
+    if not video_id:
+        die(f"Could not extract video ID from: {url}")
+
+    print(f"  Video ID: {video_id}")
+
+    # ── Step 2: Get metadata ──
+    print("  Fetching metadata...")
+    meta = get_metadata(url)
+
+    title = meta.get("title", "Untitled") or "Untitled"
+    channel = meta.get("channel", "Unknown") or "Unknown"
+    date = format_date(meta.get("upload_date", ""))
+    duration = meta.get("duration_string", "") or ""
+    views = meta.get("view_count", 0) or 0
+    description = (meta.get("description") or "") or ""
+
+    print(f'  Title: {title}')
+    print(f'  Channel: {channel}')
+    print(f'  Duration: {duration}')
+
+    # ── Step 3: Fetch transcript ──
+    print("  Fetching transcript...")
+    transcript_lines, transcript_error = fetch_transcript(video_id)
+
+    if transcript_lines:
+        transcript_text = "\n".join(transcript_lines)
+        print(f"  Transcript: {len(transcript_lines)} lines")
+    else:
+        transcript_text = f"_Transcript unavailable: {transcript_error}_"
+        print(f"  Transcript: unavailable ({transcript_error})")
+
+    # ── Step 4: Generate one-sentence summary ──
+    summary = one_liner(description, title, transcript_text)
+    print(f"  Summary: {summary}")
+
+    # ── Step 5: Write vault note ──
+    print("  Writing vault note...")
+    outfile = write_vault_note(
+        title=title,
+        channel=channel,
+        url=url,
+        date=date,
+        duration=duration,
+        views=views,
+        description=description,
+        transcript_text=transcript_text,
+        category=category,
+    )
+
+    relpath = str(outfile.relative_to(VAULT))
+    print(f"  Written: {relpath}")
+
+    # ── Step 6: Seed Honcho memory ──
+    workspace = CATEGORY_WORKSPACE_MAP[category]
+    print(f"  Seeding Honcho ({workspace})...")
+    seed_honcho(
+        workspace=workspace,
+        title=title,
+        channel=channel,
+        url=url,
+        category=category,
+        vault_relpath=relpath,
+        one_sentence=summary,
+    )
+
+    # ── Step 7: Update recent log ──
+    update_recent(title, channel, category, relpath, summary)
+
+    # ── Final output (WebUI parses this) ──
+    print(f"Written: {outfile}")
+
+
+if __name__ == "__main__":
+    main()
