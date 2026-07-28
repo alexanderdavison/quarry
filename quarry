@@ -28,7 +28,7 @@ VAULT = "/mnt/obsidian-vault"
 VENV = "/opt/scraper-venv"
 RECENT_FILE = "/opt/quarry/recent.json"
 HONCHO_BASE = "http://192.168.1.23:8000"
-HONCHO_API_KEY = os.environ.get("HONCHO_API_KEY", "")
+HONCHO_API_KEY = os.environ.get("HONCHO_API_KEY", "") or open("/opt/quarry/.env").read().strip()
 
 CATEGORY_WORKSPACE_MAP = {
     "sources":         "hermes",
@@ -211,18 +211,19 @@ def seed_honcho(workspace: str, title: str, channel: str, url: str,
     )
 
     payload = {
-        "peer": "ishmael",
-        "conclusion": conclusion,
+        "content": conclusion,
+        "observer_id": "hermes",
+        "observed_id": "ishmael",
     }
 
     try:
         data = json.dumps(payload).encode()
         req = urllib.request.Request(
-            f"{HONCHO_BASE}/v3/workspaces/{workspace}/conclude",
+            f"{HONCHO_BASE}/v3/workspaces/{workspace}/conclusions",
             data=data,
             headers={
                 "Content-Type": "application/json",
-                "X-API-Key": HONCHO_API_KEY,
+                "Authorization": f"Bearer {HONCHO_API_KEY}",
             },
             method="POST",
         )

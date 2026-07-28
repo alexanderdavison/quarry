@@ -584,9 +584,9 @@ def debug():
         try:
             import urllib.request
             req = urllib.request.Request(
-                "http://192.168.1.23:8000/v3/workspaces/hermes/conclude",
-                data=b'{"peer":"ishmael","conclusion":"quarry health check"}',
-                headers={"Content-Type": "application/json", "X-API-Key": honcho_key},
+                "http://192.168.1.23:8000/v3/workspaces/hermes/conclusions",
+                data=b'{"conclusions":[{"content":"quarry health check","observer_id":"hermes","observed_id":"ishmael"}]}',
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {honcho_key}"},
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=3) as resp:
