@@ -492,7 +492,7 @@ def scrape():
         stdout = result.stdout.strip()
 
         if result.returncode == 0 and "Written:" in stdout:
-            file_path = stdout.split("Written:", 1)[1].strip()
+            file_path = stdout.split("Written:", 1)[1].lstrip().split(chr(10))[0].strip()
             rel_path = file_path.replace(VAULT, "").lstrip("/")
             # Pull summary from recent.json if available
             summary = ""

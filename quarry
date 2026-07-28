@@ -211,9 +211,11 @@ def seed_honcho(workspace: str, title: str, channel: str, url: str,
     )
 
     payload = {
-        "content": conclusion,
-        "observer_id": "hermes",
-        "observed_id": "ishmael",
+        "conclusions": [{
+            "content": conclusion,
+            "observer_id": "hermes",
+            "observed_id": "ishmael",
+        }]
     }
 
     try:
