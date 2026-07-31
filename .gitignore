@@ -1,0 +1,9 @@
+# Runtime/secret files — never commit
+.env
+.env.*
+*.backup
+*.pre-*
+recent.json
+__pycache__/
+*.pyc
+backups/

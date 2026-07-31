@@ -7,6 +7,7 @@ Usage:
 
 Categories map to vault subdirectories and Honcho workspaces:
     sources, shared, homelab-wiki, personal-wiki  →  hermes (homelab)
+    ish-d                                          →  hermes_ish-d
     real-estate                                    →  hermes_real-estate
     dental-msp                                     →  hermes_dental-msp
     axiom-music                                    →  hermes_axiom-music
@@ -35,6 +36,7 @@ CATEGORY_WORKSPACE_MAP = {
     "shared":          "hermes",
     "homelab-wiki":    "hermes",
     "personal-wiki":   "hermes",
+    "ish-d":           "hermes_ish-d",
     "real-estate":     "hermes_real-estate",
     "dental-msp":      "hermes_dental-msp",
     "axiom-music":     "hermes_axiom-music",
@@ -165,6 +167,11 @@ def write_vault_note(title: str, channel: str, url: str, date: str,
     """Write a markdown note to the vault."""
     outdir = Path(VAULT) / category / "youtube"
     outdir.mkdir(parents=True, exist_ok=True)
+    # NFS chain squashes root; world-writable dirs are required for writes
+    try:
+        outdir.chmod(0o757)
+    except OSError:
+        pass
 
     filename = f"{date}-{slugify(title)}.md"
     outfile = outdir / filename

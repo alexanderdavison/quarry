@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quarry</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #0b0b0e; color: #e8e8ed; display: flex; height: 100vh; overflow: hidden; }
+  a { color: inherit; text-decoration: none; }
+  button { cursor: pointer; border: none; background: none; color: inherit; font-family: inherit; }
+  .sidebar { width: 240px; min-width: 240px; background: #111115; border-right: 1px solid #222228; display: flex; flex-direction: column; overflow-y: auto; }
+  .sidebar .brand { padding: 16px; font-size: 1.1rem; font-weight: 700; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #222228; }
+  .sidebar .brand img { width: 22px; height: 22px; border-radius: 4px; }
+  .sidebar .section { padding: 12px 16px 4px; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em; color: #555566; font-weight: 600; }
+  .sidebar .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 0.82rem; color: #88889a; cursor: pointer; border-radius: 6px; margin: 1px 8px; }
+  .sidebar .nav-item:hover { background: #1e1e24; color: #e8e8ed; }
+  .sidebar .nav-item.active { background: #8b5cf6; color: #fff; }
+  .main { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
+  .header { display: flex; align-items: center; gap: 12px; padding: 12px 24px; border-bottom: 1px solid #222228; min-height: 52px; }
+  .header .breadcrumb { font-size: 0.85rem; color: #88889a; }
+  .content { flex: 1; padding: 24px; overflow-y: auto; }
+  .page { display: none; }
+  .page.active { display: block; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 100px; font-size: 0.75rem; font-weight: 500; cursor: pointer; border: 1px solid #222228; color: #88889a; }
+  .pill:hover { border-color: #8b5cf6; color: #e8e8ed; }
+  .pill.active { background: #8b5cf6; border-color: #8b5cf6; color: #fff; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 6px; font-size: 0.8rem; font-weight: 500; }
+  .btn-primary { background: #8b5cf6; color: #fff; }
+  .btn-primary:hover { background: #a47cf6; }
+  .btn-ghost { border: 1px solid #222228; color: #88889a; }
+  .btn-ghost:hover { border-color: #8b5cf6; color: #e8e8ed; }
+  .btn-danger { border: 1px solid #f87171; color: #f87171; }
+  .btn-danger:hover { background: #f87171; color: #fff; }
+  input, select { background: #18181d; border: 1px solid #222228; color: #e8e8ed; border-radius: 6px; padding: 8px 12px; outline: none; font-family: inherit; }
+  input:focus, select:focus { border-color: #8b5cf6; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: #555566; font-weight: 600; padding: 8px 12px; border-bottom: 1px solid #222228; }
+  td { padding: 10px 12px; font-size: 0.82rem; border-bottom: 1px solid #222228; color: #88889a; }
+  .empty-state { text-align: center; padding: 60px 20px; color: #555566; }
+  .empty-state h3 { font-size: 1rem; margin-bottom: 8px; }
+  .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+  .toast { padding: 10px 16px; border-radius: 8px; font-size: 0.82rem; max-width: 360px; animation: slideIn 0.2s ease; }
+  .toast-success { background: #22c55e; color: #fff; }
+  .toast-error { background: #ef4444; color: #fff; }
+  .toast-warning { background: #f59e0b; color: #fff; }
+</style>
+</head>
+<body>
+
+<div class="sidebar" id="sidebar">
+  <div class="brand"><img src="/logo.svg" alt=""><span>Quarry</span></div>
+  <div class="section">Content</div>
+  <div class="nav-item active" onclick="navigate('home');return false">Home</div>
+  <div class="nav-item" onclick="navigate('recent');return false">Recent</div>
+  <div class="nav-item" onclick="navigate('library');return false">Library</div>
+  <div class="nav-item" onclick="navigate('categories');return false">Categories</div>
+  <div class="nav-item" onclick="navigate('tags');return false">Tags</div>
+  <div class="nav-item" onclick="navigate('stats');return false">Stats</div>
+  <div class="nav-item" onclick="navigate('activity');return false">Activity</div>
+  <div class="nav-item" onclick="navigate('settings');return false">Settings</div>
+  <div class="section">System</div>
+  <div class="nav-item" onclick="navigate('jobs');return false">Jobs</div>
+  <div class="nav-item" onclick="navigate('system-status');return false">System</div>
+  <div class="section">Quick Actions</div>
+  <div class="nav-item" onclick="navigate('import');return false">Import</div>
+  <div class="nav-item" onclick="navigate('vault');return false">Vault</div>
+  <div class="nav-item" onclick="navigate('memory');return false">Memory</div>
+</div>
+
+<div class="main">
+  <div class="header">
+    <div class="breadcrumb" id="breadcrumb">Quarry</div>
+  </div>
+  <div class="content">
+
+<div class="page active" id="page-home">
+  <h2 style="margin-bottom:16px">Mine videos. Preserve knowledge.</h2>
+  <div id="home"></div>
+  <div id="home-recent-list"></div>
+</div>
+
+<div class="page" id="page-recent">
+  <h2 style="margin-bottom:16px">Recent</h2>
+  <select id="recent-filter" onchange="renderRecent()" style="margin-bottom:12px"></select>
+  <div id="recent-table-wrap"></div>
+</div>
+
+<div class="page" id="page-library">
+  <h2 style="margin-bottom:16px">Library</h2>
+  <input id="lib-search" placeholder="Search..." oninput="renderLibrary()" style="margin-bottom:12px;width:100%">
+  <div id="library-grid"></div>
+</div>
+
+<div class="page" id="page-categories"><h2>Categories</h2><div id="cat-grid"></div></div>
+<div class="page" id="page-tags"><h2>Tags</h2><div id="tag-grid"></div></div>
+<div class="page" id="page-stats"><h2>Stats</h2><div id="stats-load"></div></div>
+<div class="page" id="page-activity"><h2>Activity</h2><div id="activity-load"></div></div>
+<div class="page" id="page-settings"><h2>Settings</h2><div id="settings-load"></div></div>
+<div class="page" id="page-jobs"><h2>Jobs</h2><div id="jobs-load"></div></div>
+<div class="page" id="page-system-status"><h2>System</h2><div id="sys-status-checks"></div></div>
+<div class="page" id="page-import"><h2>Import</h2><div id="import-load"></div></div>
+<div class="page" id="page-vault"><h2>Vault</h2><div id="vault-load"></div></div>
+<div class="page" id="page-memory"><h2>Memory</h2><div id="memory-load"></div></div>
+
+  </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+let scrapesData = [];
+let selectedCategory = "sources";
+
+const CATEGORIES = [
+  "sources", "shared", "homelab-wiki", "personal-wiki",
+  "ish-d", "real-estate", "dental-msp", "axiom-music"
+];
+
+const CATEGORY_LABELS = {
+  "sources": "Sources", "shared": "Shared",
+  "homelab-wiki": "homelab-wiki", "personal-wiki": "Personal",
+  "ish-d": "Ish D", "real-estate": "Real Estate",
+  "dental-msp": "Dental", "axiom-music": "Axiom"
+};
+
+// Navigation
+function navigate(page) {
+  const hashMap = {
+    "home": "home", "recent": "recent", "library": "library",
+    "categories": "categories", "tags": "tags", "stats": "stats",
+    "activity": "activity", "settings": "settings",
+    "import": "import", "vault": "vault", "memory": "memory",
+    "jobs": "jobs", "system-status": "system-status"
+  };
+  window.location.hash = "#" + (hashMap[page] || page);
+
+  document.querySelectorAll(".page").forEach(function(p) {
+    p.classList.remove("active");
+  });
+  var target = document.getElementById("page-" + page);
+  if (target) {
+    target.classList.add("active");
+  }
+  document.querySelectorAll(".nav-item").forEach(function(n) {
+    n.classList.remove("active");
+    if (n.textContent.toLowerCase().trim() === page.replace("-", " ") || n.textContent.toLowerCase().trim() === page) {
+      n.classList.add("active");
+    }
+  });
+  document.getElementById("breadcrumb").textContent = "Quarry / " + page;
+
+  // Load page data
+  if (page === "recent") loadRecent();
+  else if (page === "library") loadLibrary();
+  else if (page === "home") loadHome();
+  else if (page === "categories") renderCategories();
+  else if (page === "settings") loadSettings();
+  else if (page === "system-status") loadSystemStatus();
+  else if (page === "stats") loadStats();
+  else if (page === "activity") loadActivity();
+  else if (page === "tags") loadTags();
+  else if (page === "import") loadImport();
+  else if (page === "vault") loadVault();
+  else if (page === "memory") loadMemory();
+}
+
+// Hash routing
+function handleHash() {
+  var hash = window.location.hash.slice(1) || "";
+  if (hash.startsWith("/")) hash = hash.slice(1);
+  var pageMap = {
+    "": "home", "recent": "recent", "library": "library",
+    "categories": "categories", "tags": "tags", "stats": "stats",
+    "activity": "activity", "settings": "settings",
+    "import": "import", "vault": "vault", "memory": "memory",
+    "jobs": "jobs", "system-status": "system-status"
+  };
+  var page = pageMap[hash] || "home";
+  navigate(page);
+}
+
+// Toast
+function showToast(msg, type) {
+  var c = document.getElementById("toast-container");
+  var t = document.createElement("div");
+  t.className = "toast toast-" + (type || "success");
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(function() { t.remove(); }, 3000);
+}
+
+// API
+async function api(url, opts) {
+  try {
+    var r = await fetch(url, opts || {});
+    return await r.json();
+  } catch(e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+// Build a /view/ URL, escaping each path segment but keeping the separators
+function viewUrl(p) {
+  return "/view/" + String(p || "").split("/").map(function(seg) {
+    return encodeURIComponent(seg);
+  }).join("/");
+}
+
+// "2026-07-31-some-video-title" -> "some video title"
+function cleanFileTitle(name) {
+  var t = String(name || "");
+  t = t.replace(/^\d{4}-\d{2}-\d{2}[-_]?/, "");
+  t = t.replace(/[-_]+/g, " ").trim();
+  return t || String(name || "");
+}
+
+// Pills — the bucket selector. Shared by every scrape form on the page.
+function renderPills(wrapId) {
+  var wrap = document.getElementById(wrapId);
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  CATEGORIES.forEach(function(cat) {
+    var p = document.createElement("span");
+    p.className = "pill" + (cat === selectedCategory ? " active" : "");
+    p.textContent = CATEGORY_LABELS[cat] || cat;
+    p.dataset.v = cat;
+    p.onclick = function() { setSelectedCategory(cat); };
+    wrap.appendChild(p);
+  });
+}
+
+function setSelectedCategory(cat) {
+  selectedCategory = cat;
+  document.querySelectorAll(".scrape-pills .pill").forEach(function(x) {
+    x.className = "pill" + (x.dataset.v === cat ? " active" : "");
+  });
+}
+
+// Scrape form — rendered on both Home and Import.
+// Child ids are derived from containerId, so "home" yields #home-result.
+function renderScrapeForm(containerId) {
+  var wrap = document.getElementById(containerId);
+  if (!wrap) return;
+  if (document.getElementById(containerId + "-url")) return; // keep typed URL + last result
+  var h = "<div style='background:#141418;border:1px solid #222228;border-radius:10px;padding:20px;margin-bottom:20px'>";
+  h += "<div style='display:flex;gap:10px;align-items:center'>";
+  h += "<input id='" + containerId + "-url' placeholder='Paste YouTube link...' style='flex:1;font-size:1rem;padding:12px 14px'>";
+  h += "<button id='" + containerId + "-btn' class='btn btn-primary' style='padding:12px 20px;font-size:0.9rem;white-space:nowrap'>Transcribe &amp; Save</button>";
+  h += "</div>";
+  h += "<div style='font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:#555566;font-weight:600;margin:16px 0 6px'>Save to:</div>";
+  h += "<div class='scrape-pills' id='" + containerId + "-pills' style='display:flex;gap:6px;flex-wrap:wrap'></div>";
+  h += "</div>";
+  h += "<div id='" + containerId + "-result'></div>";
+  wrap.innerHTML = h;
+  renderPills(containerId + "-pills");
+  document.getElementById(containerId + "-btn").onclick = function() {
+    submitScrape(containerId);
+  };
+  document.getElementById(containerId + "-url").onkeydown = function(e) {
+    if (e.key === "Enter") { e.preventDefault(); submitScrape(containerId); }
+  };
+}
+
+async function submitScrape(containerId) {
+  var input = document.getElementById(containerId + "-url");
+  var btn = document.getElementById(containerId + "-btn");
+  var res = document.getElementById(containerId + "-result");
+  if (!input || !btn) return;
+  var url = (input.value || "").trim();
+  if (!url) { showToast("Paste a YouTube link first", "warning"); return; }
+  var cat = selectedCategory;
+  var catLabel = CATEGORY_LABELS[cat] || cat;
+  btn.disabled = true;
+  btn.textContent = "Transcribing...";
+  if (res) {
+    res.innerHTML = "<div style='background:#141418;border:1px solid #222228;border-radius:8px;padding:16px;color:#88889a;font-size:0.82rem'>Transcribing into " + esc(catLabel) + "...</div>";
+  }
+  var d = await api("/scrape", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: url, category: cat })
+  });
+  btn.disabled = false;
+  btn.textContent = "Transcribe & Save";
+  if (d && d.ok) {
+    input.value = "";
+    // /scrape returns only {file, summary}; title + channel live on the recent record
+    var rd = await api("/recent");
+    scrapesData = rd.scrapes || [];
+    var rec = null;
+    scrapesData.forEach(function(s) { if (!rec && s.path === d.file) rec = s; });
+    renderScrapeResult(containerId, d, rec, catLabel);
+    showToast("Saved to " + catLabel, "success");
+    renderHomeRecent();
+  } else {
+    var err = (d && d.error) || "Scrape failed";
+    showToast(err, "error");
+    if (res) {
+      res.innerHTML = "<div style='background:#141418;border:1px solid #f87171;border-radius:8px;padding:16px'>" +
+        "<div style='font-weight:600;color:#f87171;margin-bottom:6px'>Scrape failed</div>" +
+        "<div style='font-size:0.8rem;color:#88889a;white-space:pre-wrap'>" + esc(err) + "</div></div>";
+    }
+  }
+}
+
+function renderScrapeResult(containerId, d, rec, catLabel) {
+  var res = document.getElementById(containerId + "-result");
+  if (!res) return;
+  var file = d.file || "";
+  var title = (rec && rec.title) || cleanFileTitle(file.split("/").pop().replace(/\.md$/, ""));
+  var channel = (rec && rec.channel) || "";
+  var summary = (rec && rec.summary) || d.summary || "";
+  var h = "<div style='background:#141418;border:1px solid #22c55e;border-radius:8px;padding:16px'>";
+  h += "<div style='font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:#22c55e;font-weight:600;margin-bottom:8px'>Saved to " + esc(catLabel) + "</div>";
+  h += "<div style='font-weight:600;font-size:1rem'>" + esc(title) + "</div>";
+  if (channel) {
+    h += "<div style='font-size:0.78rem;color:#555566;margin-top:2px'>" + esc(channel) + "</div>";
+  }
+  if (summary) {
+    h += "<div style='font-size:0.82rem;color:#88889a;margin-top:10px'>" + esc(summary) + "</div>";
+  }
+  if (file) {
+    h += "<div style='margin-top:12px'><a class='btn btn-ghost' href='" + viewUrl(file) + "' target='_blank'>View note</a></div>";
+  }
+  h += "</div>";
+  res.innerHTML = h;
+}
+
+// Home
+async function loadHome() {
+  renderScrapeForm("home");
+  var d = await api("/recent");
+  scrapesData = d.scrapes || [];
+  renderHomeRecent();
+}
+
+function renderHomeRecent() {
+  var list = document.getElementById("home-recent-list");
+  if (!list) return;
+  if (scrapesData.length === 0) {
+    list.innerHTML = "<div class='empty-state'><h3>No scrapes yet</h3><p>Submit a YouTube URL to get started.</p></div>";
+    return;
+  }
+  var html = "<h3 style='margin:16px 0 8px'>Recent</h3><table><thead><tr><th>Title</th><th>Channel</th><th>Category</th></tr></thead><tbody>";
+  scrapesData.slice(0, 5).forEach(function(s) {
+    html += "<tr><td>" + esc(s.title) + "</td><td>" + esc(s.channel) + "</td><td>" + esc(CATEGORY_LABELS[s.category] || s.category) + "</td></tr>";
+  });
+  html += "</tbody></table>";
+  list.innerHTML = html;
+}
+
+// Recent
+async function loadRecent() {
+  var d = await api("/recent");
+  scrapesData = d.scrapes || [];
+  var filter = document.getElementById("recent-filter");
+  if (filter && filter.options.length === 0) {
+    var o = document.createElement("option");
+    o.value = "all";
+    o.textContent = "All categories";
+    filter.appendChild(o);
+    CATEGORIES.forEach(function(c) {
+      var op = document.createElement("option");
+      op.value = c;
+      op.textContent = CATEGORY_LABELS[c] || c;
+      filter.appendChild(op);
+    });
+    filter.value = "all";
+  }
+  renderRecent();
+}
+
+function renderRecent() {
+  var wrap = document.getElementById("recent-table-wrap");
+  var filter = document.getElementById("recent-filter");
+  if (filter) {
+    var fv = filter.value;
+    var items = scrapesData;
+    if (fv !== "all") items = items.filter(function(s) { return s.category === fv; });
+    if (items.length === 0) {
+      wrap.innerHTML = "<div class='empty-state'><h3>No items</h3></div>";
+      return;
+    }
+    var html = "<table><thead><tr><th>Title</th><th>Channel</th><th>Category</th><th>Actions</th></tr></thead><tbody>";
+    items.forEach(function(s) {
+      html += "<tr><td>" + esc(s.title) + "</td><td>" + esc(s.channel) + "</td><td>" + esc(CATEGORY_LABELS[s.category] || s.category) + "</td>";
+      html += "<td style='display:flex;gap:4px'>";
+      html += "<button class='btn btn-ghost btn-sm' onclick='openMoveModal(\"" + s.id + "\",\"" + s.category + "\")'>Move</button>";
+      html += "<button class='btn btn-danger btn-sm' onclick='deleteRecent(\"" + s.id + "\")'>Delete</button>";
+      html += "</td></tr>";
+    });
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  }
+}
+
+// Library
+async function loadLibrary() {
+  var d = await api("/recent");
+  scrapesData = d.scrapes || [];
+  renderLibrary();
+}
+
+function renderLibrary() {
+  var grid = document.getElementById("library-grid");
+  var q = (document.getElementById("lib-search")?.value || "").toLowerCase();
+  var items = scrapesData;
+  if (q) items = items.filter(function(s) { return s.title.toLowerCase().includes(q) || s.channel.toLowerCase().includes(q); });
+  if (items.length === 0) {
+    grid.innerHTML = "<div class='empty-state'><h3>No items</h3></div>";
+    return;
+  }
+  var html = "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px'>";
+  items.forEach(function(s) {
+    html += "<div style='background:#141418;border:1px solid #222228;border-radius:8px;padding:16px'>";
+    html += "<div style='font-weight:600;margin-bottom:4px'>" + esc(s.title) + "</div>";
+    html += "<div style='font-size:0.75rem;color:#555566;margin-bottom:8px'>" + esc(s.channel) + " · " + esc(CATEGORY_LABELS[s.category] || s.category) + "</div>";
+    html += "<div style='display:flex;gap:4px'>";
+    html += "<button class='btn btn-ghost btn-sm' onclick='openMoveModal(\"" + s.id + "\",\"" + s.category + "\")'>Move</button>";
+    html += "<button class='btn btn-danger btn-sm' onclick='deleteRecent(\"" + s.id + "\")'>Delete</button>";
+    html += "</div></div>";
+  });
+  html += "</div>";
+  grid.innerHTML = html;
+}
+
+// Categories
+function renderCategories() {
+  var grid = document.getElementById("cat-grid");
+  var counts = {};
+  scrapesData.forEach(function(s) {
+    var c = s.category || "uncategorized";
+    counts[c] = (counts[c] || 0) + 1;
+  });
+  var html = "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px'>";
+  CATEGORIES.forEach(function(cat) {
+    var label = CATEGORY_LABELS[cat] || cat;
+    var count = counts[cat] || 0;
+    html += "<div style='background:#141418;border:1px solid #222228;border-radius:8px;padding:16px'>";
+    html += "<div style='font-weight:600'>" + label + "</div>";
+    html += "<div style='font-size:0.75rem;color:#555566'>" + count + " items</div>";
+    html += "</div>";
+  });
+  html += "</div>";
+  grid.innerHTML = html;
+}
+
+// Delete
+async function deleteRecent(id) {
+  if (!confirm("Delete this entry? (vault note stays)")) return;
+  var d = await api("/delete-scrape", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: id })
+  });
+  if (d.ok) {
+    showToast("Deleted", "success");
+    loadRecent();
+  } else {
+    showToast(d.error || "Delete failed", "error");
+  }
+}
+
+// Move modal
+var moveItemId = null;
+var moveCurrentCat = null;
+
+function openMoveModal(id, cat) {
+  moveItemId = id;
+  moveCurrentCat = cat;
+  var html = "<h3>Move to category</h3>";
+  html += "<div style='margin:12px 0'>Current: <strong>" + (CATEGORY_LABELS[cat] || cat) + "</strong></div>";
+  html += "<select id='move-select' style='width:100%;margin-bottom:12px'>";
+  CATEGORIES.forEach(function(c) {
+    html += "<option value='" + c + "'" + (c === cat ? " selected" : "") + ">" + (CATEGORY_LABELS[c] || c) + "</option>";
+  });
+  html += "</select>";
+  html += "<div style='display:flex;gap:8px'>";
+  html += "<button class='btn btn-primary' onclick='confirmMove()'>Move</button>";
+  html += "<button class='btn btn-ghost' onclick='closeMoveModal()'>Cancel</button>";
+  html += "</div>";
+  // Use a simple overlay
+  var overlay = document.createElement("div");
+  overlay.id = "move-overlay";
+  overlay.style.cssText = "position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9998";
+  var modal = document.createElement("div");
+  modal.style.cssText = "background:#18181d;border:1px solid #222228;border-radius:12px;padding:24px;min-width:360px";
+  modal.innerHTML = html;
+  overlay.appendChild(modal);
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+function closeMoveModal() {
+  var el = document.getElementById("move-overlay");
+  if (el) el.remove();
+}
+
+async function confirmMove() {
+  var cat = document.getElementById("move-select")?.value;
+  if (!cat || cat === moveCurrentCat) { showToast("No change", "warning"); return; }
+  var d = await api("/api/items/" + encodeURIComponent(moveItemId) + "/recategorize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ category: cat })
+  });
+  if (d.success) {
+    showToast("Moved to " + (CATEGORY_LABELS[cat] || cat), "success");
+    closeMoveModal();
+    loadRecent();
+    loadLibrary();
+    loadHome();
+  } else {
+    showToast(d.error || "Move failed", "error");
+  }
+}
+
+// System
+async function loadSystemStatus() {
+  var d = await api("/debug");
+  var html = "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px'>";
+  var checks = [
+    { label: "Scraper", status: d.scraper_ok ? "OK" : "Error" },
+    { label: "Transcript API", status: d.transcript_ok ? "OK" : "Error" },
+    { label: "Honcho", status: d.honcho_ok ? "OK" : "Error" },
+    { label: "yt-dlp", value: d.ytdlp_version },
+    { label: "Scrapes", value: String(d.scrape_count) },
+  ];
+  checks.forEach(function(c) {
+    html += "<div style='background:#141418;border:1px solid #222228;border-radius:8px;padding:16px'>";
+    html += "<div style='font-size:0.75rem;color:#555566;margin-bottom:4px'>" + c.label + "</div>";
+    html += "<div style='font-weight:600;color:" + (c.status === "OK" ? "#4ade80" : c.status === "Error" ? "#f87171" : "#e8e8ed") + "'>" + (c.status || c.value || "—") + "</div>";
+    html += "</div>";
+  });
+  html += "</div>";
+  document.getElementById("sys-status-checks").innerHTML = html;
+}
+
+// Settings
+async function loadSettings() {
+  document.getElementById("settings-load").innerHTML = "<p>Settings panel loaded. Configure default category, vault path, and Honcho settings here.</p>";
+}
+
+// Stats
+function loadStats() {
+  var total = scrapesData.length;
+  var channels = {};
+  scrapesData.forEach(function(s) { channels[s.channel] = (channels[s.channel] || 0) + 1; });
+  var html = "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px'>";
+  html += "<div style='background:#141418;border:1px solid #222228;border-radius:8px;padding:16px'><div style='font-size:0.75rem;color:#555566'>Total Videos</div><div style='font-size:1.5rem;font-weight:700;margin-top:4px'>" + total + "</div></div>";
+  html += "<div style='background:#141418;border:1px solid #222228;border-radius:8px;padding:16px'><div style='font-size:0.75rem;color:#555566'>Channels</div><div style='font-size:1.5rem;font-weight:700;margin-top:4px'>" + Object.keys(channels).length + "</div></div>";
+  html += "</div>";
+  document.getElementById("stats-load").innerHTML = html;
+}
+
+// Activity
+function loadActivity() {
+  if (scrapesData.length === 0) {
+    document.getElementById("activity-load").innerHTML = "<div class='empty-state'><p>No activity yet</p></div>";
+    return;
+  }
+  var html = "<div style='display:flex;flex-direction:column;gap:8px'>";
+  scrapesData.slice(0, 20).forEach(function(s) {
+    html += "<div style='display:flex;align-items:center;gap:12px;padding:8px 12px;background:#141418;border-radius:6px'>";
+    html += "<div style='flex:1'><div style='font-weight:500'>" + esc(s.title) + "</div><div style='font-size:0.75rem;color:#555566'>" + esc(s.channel) + " · " + s.date + "</div></div>";
+    html += "<div style='font-size:0.7rem;color:#555566'>" + (CATEGORY_LABELS[s.category] || s.category) + "</div>";
+    html += "</div>";
+  });
+  html += "</div>";
+  document.getElementById("activity-load").innerHTML = html;
+}
+
+// Import — same scrape form as Home
+function loadImport() {
+  renderScrapeForm("import-load");
+}
+
+// Vault
+async function loadVault() {
+  var el = document.getElementById("vault-load");
+  el.innerHTML = "<p style='color:#555566;font-size:0.82rem'>Loading vault...</p>";
+  var d = await api("/api/vault");
+  var cats = (d && d.categories) || [];
+  if (cats.length === 0) {
+    el.innerHTML = "<div class='empty-state'><h3>Vault unavailable</h3><p>" + esc((d && d.error) || "No categories returned.") + "</p></div>";
+    return;
+  }
+  var html = "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px'>";
+  cats.forEach(function(c) {
+    var files = c.files || [];
+    var count = c.count || 0;
+    html += "<div style='background:#141418;border:1px solid #222228;border-radius:8px;padding:16px'>";
+    html += "<div style='display:flex;justify-content:space-between;align-items:baseline;gap:8px'>";
+    html += "<div style='font-weight:600'>" + esc(c.label) + "</div>";
+    html += "<div style='font-size:0.7rem;color:#555566;white-space:nowrap'>" + count + " files</div>";
+    html += "</div>";
+    html += "<div style='font-size:0.72rem;color:#555566;margin:4px 0 10px'>" + esc(c.path) + "</div>";
+    if (files.length === 0) {
+      html += "<div style='font-size:0.78rem;color:#555566'>No notes yet</div>";
+    } else {
+      html += "<div style='display:flex;flex-direction:column;gap:5px'>";
+      files.slice(0, 20).forEach(function(f) {
+        html += "<a href='" + viewUrl(f.path) + "' target='_blank' style='font-size:0.78rem;color:#a47cf6'>" + esc(cleanFileTitle(f.title)) + "</a>";
+      });
+      html += "</div>";
+      if (count > 20) {
+        html += "<div style='font-size:0.7rem;color:#555566;margin-top:8px'>+ " + (count - 20) + " more</div>";
+      }
+    }
+    html += "</div>";
+  });
+  html += "</div>";
+  el.innerHTML = html;
+}
+
+// Memory
+async function loadMemory() {
+  var el = document.getElementById("memory-load");
+  el.innerHTML = "<p style='color:#555566;font-size:0.82rem'>Loading memory status...</p>";
+  var dbg = await api("/debug");
+  var rec = await api("/recent");
+  scrapesData = rec.scrapes || [];
+  var ok = !!(dbg && dbg.honcho_ok);
+  var html = "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:20px'>";
+  html += "<div style='background:#141418;border:1px solid #222228;border-radius:8px;padding:16px'>";
+  html += "<div style='font-size:0.75rem;color:#555566;margin-bottom:4px'>Honcho</div>";
+  html += "<div style='font-weight:600;color:" + (ok ? "#4ade80" : "#f87171") + "'>" + (ok ? "Connected" : "Unavailable") + "</div>";
+  html += "<div style='font-size:0.72rem;color:#555566;margin-top:4px'>" + esc((dbg && dbg.honcho) || "?") + "</div>";
+  html += "</div>";
+  html += "<div style='background:#141418;border:1px solid #222228;border-radius:8px;padding:16px'>";
+  html += "<div style='font-size:0.75rem;color:#555566;margin-bottom:4px'>Scrapes</div>";
+  html += "<div style='font-size:1.5rem;font-weight:700'>" + ((dbg && dbg.scrape_count) || 0) + "</div>";
+  html += "</div></div>";
+  if (scrapesData.length === 0) {
+    html += "<div class='empty-state'><h3>Nothing to sync</h3><p>Scrape a video to seed Honcho memory.</p></div>";
+    el.innerHTML = html;
+    return;
+  }
+  html += "<table><thead><tr><th>Title</th><th>Category</th><th>Sync</th><th></th></tr></thead><tbody>";
+  scrapesData.forEach(function(s) {
+    var st = s.honcho_sync_status || "synced";
+    var color = st === "synced" ? "#22c55e" : st === "pending" ? "#f59e0b" : "#ef4444";
+    html += "<tr><td style='color:#e8e8ed'>" + esc(s.title) + "</td>";
+    html += "<td>" + esc(CATEGORY_LABELS[s.category] || s.category) + "</td>";
+    html += "<td><span style='display:inline-block;padding:2px 10px;border-radius:100px;font-size:0.7rem;font-weight:600;background:" + color + ";color:#fff'>" + esc(st) + "</span></td>";
+    html += "<td>";
+    if (st !== "synced") {
+      html += "<button class='btn btn-ghost' onclick='retryHonchoSync(\"" + encodeURIComponent(s.id) + "\")'>Retry</button>";
+    }
+    html += "</td></tr>";
+  });
+  html += "</tbody></table>";
+  el.innerHTML = html;
+}
+
+// id arrives already URL-encoded from the onclick attribute, so it drops straight into the path
+async function retryHonchoSync(id) {
+  var d = await api("/api/items/" + id + "/honcho-sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" }
+  });
+  if (d && d.success) {
+    showToast("Synced to Honcho", "success");
+  } else {
+    showToast((d && d.error) || "Sync failed", "error");
+  }
+  loadMemory();
+}
+
+// Tags placeholder
+function loadTags() {
+  document.getElementById("tag-grid").innerHTML = "<div class='empty-state'><p>Tags coming soon</p></div>";
+}
+
+// Helper
+function esc(s) {
+  var d = document.createElement("div");
+  d.textContent = s || "";
+  return d.innerHTML;
+}
+
+// Init
+document.addEventListener("DOMContentLoaded", function() {
+  handleHash();
+  window.addEventListener("hashchange", handleHash);
+  loadHome();
+});
+</script>
+</body>
+</html>
