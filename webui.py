@@ -13,7 +13,7 @@ YTDLP = "/opt/scraper-venv/bin/yt-dlp"
 RECENT_FILE = "/opt/quarry/recent.json"
 SETTINGS_FILE = "/opt/quarry/settings.json"
 BACKUP_DIR = "/opt/quarry/backups"
-LOGO_PATH = "/opt/quarry/quarry-logo.svg"
+LOGO_PATH = "/opt/quarry/quarry-logo.png"
 HONCHO_BASE = "http://192.168.1.23:8000"
 HONCHO_URL = f"{HONCHO_BASE}/v3/workspaces/hermes/conclusions"
 HEALTH_VERSION = "2026-08-01"
@@ -440,10 +440,11 @@ INDEX_HTML = Path("/opt/quarry/index.html").read_text()
 def index():
     return INDEX_HTML
 
-@app.route("/logo.svg")
+@app.route("/logo.svg")  # legacy alias — serves the PNG
+@app.route("/logo.png")
 def logo():
     try:
-        return send_file(LOGO_PATH, mimetype="image/svg+xml")
+        return send_file(LOGO_PATH, mimetype="image/png")
     except FileNotFoundError:
         return "", 404
 
