@@ -1,19 +1,41 @@
 #!/usr/bin/env python3
 """Quarry — YouTube scraper + memory seeder. Single-file app."""
 
-import subprocess, os, html, json, uuid, shutil, tempfile
+import subprocess, os, html, json, uuid, shutil, tempfile, re, threading
 from pathlib import Path
 from datetime import datetime, timezone
-from flask import Flask, request, render_template_string, jsonify, send_file
+from flask import Flask, request, render_template_string, jsonify, send_file, Response
 
 app = Flask(__name__)
 VAULT = "/mnt/obsidian-vault"
 SCRAPER = "/opt/quarry/quarry"
 YTDLP = "/opt/scraper-venv/bin/yt-dlp"
 RECENT_FILE = "/opt/quarry/recent.json"
+SETTINGS_FILE = "/opt/quarry/settings.json"
 BACKUP_DIR = "/opt/quarry/backups"
 LOGO_PATH = "/opt/quarry/quarry-logo.svg"
-HONCHO_URL = "http://192.168.1.23:8000/v3/workspaces/hermes/conclusions"
+HONCHO_BASE = "http://192.168.1.23:8000"
+HONCHO_URL = f"{HONCHO_BASE}/v3/workspaces/hermes/conclusions"
+HEALTH_VERSION = "2026-08-01"
+SCRAPE_TIMEOUT = 120
+BATCH_MAX_URLS = 20
+
+# Mirrors CATEGORY_WORKSPACE_MAP in the scraper — keep the two in sync.
+CATEGORY_WORKSPACE_MAP = {
+    "sources":       "hermes",
+    "shared":        "hermes",
+    "homelab-wiki":  "hermes",
+    "personal-wiki": "hermes",
+    "ish-d":         "hermes_ish-d",
+    "real-estate":   "hermes_real-estate",
+    "dental-msp":    "hermes_dental-msp",
+    "axiom-music":   "hermes_axiom-music",
+}
+
+DEFAULT_SETTINGS = {
+    "default_category": "sources",
+    "hermes_webui_url": "http://192.168.1.22:8787",
+}
 
 CATEGORIES = {
     "sources":     {"label": "Sources",     "path": "sources/youtube/"},
@@ -54,6 +76,239 @@ def _write_records_atomic(records):
         if Path(tmp).exists(): Path(tmp).unlink()
         raise
 
+def _write_json_atomic(path, payload):
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent))
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(p))
+    except Exception:
+        if Path(tmp).exists(): Path(tmp).unlink()
+        raise
+
+def _load_settings():
+    """Read settings.json, creating it with defaults on first use."""
+    try:
+        with open(SETTINGS_FILE) as f:
+            stored = json.load(f)
+        if not isinstance(stored, dict):
+            stored = {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        stored = None
+    merged = dict(DEFAULT_SETTINGS)
+    if stored is None:
+        try:
+            _write_json_atomic(SETTINGS_FILE, merged)
+        except Exception:
+            pass
+        return merged
+    for k in DEFAULT_SETTINGS:
+        v = stored.get(k)
+        if isinstance(v, str) and v.strip():
+            merged[k] = v.strip()
+    return merged
+
+# ── Video id / slug (same rules as the scraper) ────────────────
+
+_VID_PATTERNS = [
+    r'(?:v=|/v/|youtu\.be/|shorts/|embed/|live/)([a-zA-Z0-9_-]{11})',
+    r'^([a-zA-Z0-9_-]{11})$',
+]
+
+def extract_video_id(url):
+    url = (url or "").strip()
+    for p in _VID_PATTERNS:
+        m = re.search(p, url)
+        if m:
+            return m.group(1)
+    return None
+
+def slugify(text):
+    slug = re.sub(r'[^a-z0-9]+', '-', (text or "").lower()).strip('-')
+    return slug[:80] or "untitled"
+
+def _path_slug(rec_path):
+    """'homelab-wiki/youtube/2026-07-31-some-title.md' -> 'some-title'"""
+    stem = Path(rec_path or "").stem
+    return re.sub(r'^\d{4}-\d{2}-\d{2}-', '', stem)
+
+def _find_by_video_id(records, video_id):
+    if not video_id:
+        return None
+    for r in records:
+        if r.get("video_id") == video_id:
+            return r
+        u = r.get("url") or ""
+        if u and extract_video_id(u) == video_id:
+            return r
+    return None
+
+def _find_by_title_slug(records, title):
+    """Duplicate fallback for legacy records written before video_id existed."""
+    if not title:
+        return None
+    slug = slugify(title)
+    for r in records:
+        if r.get("path") and _path_slug(r["path"]) == slug:
+            return r
+    return None
+
+def _suggest_category(records, channel):
+    """Most common category previously used for this channel."""
+    if not channel:
+        return None
+    want = channel.strip().lower()
+    counts = {}
+    for r in records:
+        if (r.get("channel") or "").strip().lower() != want:
+            continue
+        cat = r.get("category")
+        if cat in CATEGORIES:
+            counts[cat] = counts.get(cat, 0) + 1
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda kv: kv[1])[0]
+
+_META_CACHE = {}
+
+def _ytdlp_meta(url, video_id):
+    """Cheap metadata probe for paste-time checks. Cached in-memory by video id."""
+    if video_id in _META_CACHE:
+        return _META_CACHE[video_id]
+    meta = {}
+    try:
+        r = subprocess.run(
+            [YTDLP, "--skip-download", "--print-json", "--no-warnings", url],
+            capture_output=True, text=True, timeout=8,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            raw = json.loads(r.stdout)
+            meta = {
+                "id": raw.get("id") or video_id,
+                "title": raw.get("title") or "",
+                "channel": raw.get("channel") or raw.get("uploader") or "",
+            }
+    except Exception:
+        meta = {}
+    if meta:
+        _META_CACHE[video_id] = meta
+    return meta
+
+def _preflight_duplicate(url, video_id):
+    """Dup check for ingest paths: exact video_id first, then legacy slug fallback
+    (records written before video_id existed)."""
+    if not video_id:
+        return None
+    records = _load_records()
+    dup = _find_by_video_id(records, video_id)
+    if dup:
+        return dup
+    meta = _ytdlp_meta(url, video_id)
+    return _find_by_title_slug(records, meta.get("title", ""))
+
+# ── Scraper streaming ──────────────────────────────────────────
+
+_STAGE_MARKERS = {
+    "STAGE:metadata":   "metadata",
+    "STAGE:transcript": "transcript",
+    "STAGE:note":       "note",
+    "STAGE:honcho":     "honcho",
+}
+_STAGE_TEXT = [
+    ("Fetching metadata",  "metadata"),
+    ("Fetching transcript","transcript"),
+    ("Writing vault note", "note"),
+    ("Seeding Honcho",     "honcho"),
+]
+_WORKING_PREFIXES = ("Title:", "Transcript:", "Summary:")
+
+def _stage_for(line, saw_markers):
+    s = line.strip()
+    if s in _STAGE_MARKERS:
+        return _STAGE_MARKERS[s]
+    # The indented "  Written: <relpath>" line means the note hit the vault.
+    if s.startswith("Written:"):
+        return "save"
+    if not saw_markers:
+        for text, stage in _STAGE_TEXT:
+            if text in s:
+                return stage
+    for w in _WORKING_PREFIXES:
+        if s.startswith(w):
+            return "working"
+    return None
+
+def _scraper_env():
+    # PYTHONUNBUFFERED keeps the child's stdout line-flushed through the pipe,
+    # which is what makes the stage stream arrive live instead of all at once.
+    return {**os.environ,
+            "HONCHO_API_KEY": os.environ.get("HONCHO_API_KEY", ""),
+            "PYTHONUNBUFFERED": "1"}
+
+def _run_scraper(url, category, timeout=SCRAPE_TIMEOUT):
+    """Yield {'kind': 'stage'|'ok'|'error', ...} while the scraper runs."""
+    try:
+        proc = subprocess.Popen(
+            [SCRAPER, url, category],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, env=_scraper_env(),
+        )
+    except Exception as e:
+        yield {"kind": "error", "error": str(e)}
+        return
+    killer = threading.Timer(timeout, proc.kill)
+    killer.start()
+    rel = None
+    tail = []
+    saw_markers = False
+    try:
+        for raw in proc.stdout:
+            line = raw.rstrip("\r\n")
+            if not line.strip():
+                continue
+            if line.strip() not in _STAGE_MARKERS:
+                tail.append(line.strip())
+                if len(tail) > 20:
+                    tail.pop(0)
+            # Only the scraper's final, unindented "Written:" line is the
+            # success signal — by then recent.json has already been updated.
+            if line.startswith("Written:"):
+                rel = line.split("Written:", 1)[1].strip().replace(VAULT, "").lstrip("/")
+                continue
+            if line.strip() in _STAGE_MARKERS:
+                saw_markers = True
+            stage = _stage_for(line, saw_markers)
+            if stage:
+                yield {"kind": "stage", "stage": stage, "message": line.strip()}
+    finally:
+        killer.cancel()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+    if rel:
+        yield {"kind": "ok", "file": rel}
+    else:
+        rc = proc.returncode
+        if rc is not None and rc < 0:
+            err = f"scraper killed (timeout after {timeout}s)"
+        else:
+            err = "\n".join(tail[-5:]).strip() or f"Exit {rc}"
+        yield {"kind": "error", "error": err}
+
+def _record_for_path(rel):
+    for r in _load_records():
+        if r.get("path") == rel:
+            return r
+    return None
+
+def _ndjson(obj):
+    return json.dumps(obj) + "\n"
+
 def _migrate_ids():
     records = _load_records()
     changed = False
@@ -73,16 +328,20 @@ def _find_record(records, item_id):
             return r
     return None
 
-def _update_honcho(item, category_name):
+def _update_honcho(item, category_id):
+    """Post a conclusion to the workspace that owns `category_id`."""
     key = os.environ.get("HONCHO_API_KEY", "")
     if not key:
         return False, "no honcho key"
+    category_name = CATEGORIES.get(category_id, {}).get("label", category_id)
+    workspace = CATEGORY_WORKSPACE_MAP.get(category_id, "hermes")
+    url = f"{HONCHO_BASE}/v3/workspaces/{workspace}/conclusions"
     content = f"Quarry scraped video: {item.get('title', 'Untitled')} from channel {item.get('channel', 'unknown')} in category {category_name}"
     try:
         import urllib.request
         payload = json.dumps({"conclusions": [{"content": content[:500], "observer_id": "hermes", "observed_id": "ishmael"}]}).encode()
         req = urllib.request.Request(
-            HONCHO_URL, data=payload,
+            url, data=payload,
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
             method="POST",
         )
@@ -147,28 +406,30 @@ def _validated_dest_path(category_id, filename):
     rp = str(dp).replace(str(Path(VAULT).resolve()), "").lstrip("/")
     return dp, rp
 
+def _shape(item):
+    dt = datetime.fromtimestamp(item.get("timestamp", 0))
+    return {
+        "id": item.get("id", ""),
+        "title": item.get("title", "Untitled"),
+        "channel": item.get("channel", ""),
+        "category": item.get("category", ""),
+        "path": item.get("path", ""),
+        "summary": item.get("summary", ""),
+        "date": dt.strftime("%Y-%m-%d %H:%M"),
+        "timestamp": item.get("timestamp", 0),
+        "honcho_sync_status": item.get("honcho_sync_status", "synced"),
+        "recategorized_at": item.get("recategorized_at", None),
+        "video_id": item.get("video_id", None),
+        "url": item.get("url", ""),
+    }
+
 def get_scrapes(limit=50):
     try:
         with open(RECENT_FILE) as f:
             records = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
-    result = []
-    for item in records[:limit]:
-        dt = datetime.fromtimestamp(item.get("timestamp", 0))
-        result.append({
-            "id": item.get("id", ""),
-            "title": item.get("title", "Untitled"),
-            "channel": item.get("channel", ""),
-            "category": item.get("category", ""),
-            "path": item.get("path", ""),
-            "summary": item.get("summary", ""),
-            "date": dt.strftime("%Y-%m-%d %H:%M"),
-            "timestamp": item.get("timestamp", 0),
-            "honcho_sync_status": item.get("honcho_sync_status", "synced"),
-            "recategorized_at": item.get("recategorized_at", None),
-        })
-    return result
+    return [_shape(item) for item in records[:limit]]
 
 _migrate_ids()
 
@@ -188,35 +449,112 @@ def logo():
 
 @app.route("/scrape", methods=["POST"])
 def scrape():
+    """NDJSON stream: {'type':'stage'|'done', ...}. The SPA is the only consumer."""
     data = request.get_json() or {}
     url = data.get("url", "").strip()
     category = data.get("category", "sources").strip()
-    if not url:
-        return jsonify({"ok": False, "error": "URL is required"})
-    try:
-        result = subprocess.run(
-            [SCRAPER, url, category],
-            capture_output=True, text=True, timeout=120,
-            env={**os.environ, "HONCHO_API_KEY": os.environ.get("HONCHO_API_KEY", "")},
-        )
-        stdout = result.stdout.strip()
-        stderr = result.stderr.strip()
-        if result.returncode == 0 and "Written:" in stdout:
-            fpath = stdout.split("Written:", 1)[1].strip().split("\n")[0].strip()
-            rel = fpath.replace(VAULT, "").lstrip("/")
-            summary = ""
-            try:
-                with open(RECENT_FILE) as f:
-                    recents = json.load(f)
-                if recents and recents[0].get("path") == rel:
-                    summary = recents[0].get("summary", "")
-            except (FileNotFoundError, json.JSONDecodeError):
-                pass
-            return jsonify({"ok": True, "file": rel, "summary": summary, "output": stdout})
-        else:
-            return jsonify({"ok": False, "error": stderr or stdout or f"Exit {result.returncode}"})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+
+    def gen():
+        if not url:
+            yield _ndjson({"type": "done", "ok": False, "error": "URL is required"})
+            return
+        if category not in CATEGORIES:
+            yield _ndjson({"type": "done", "ok": False, "error": "unknown category"})
+            return
+        video_id = extract_video_id(url)
+        if not video_id:
+            yield _ndjson({"type": "done", "ok": False, "error": "not a YouTube URL"})
+            return
+        dup = _preflight_duplicate(url, video_id)
+        if dup:
+            yield _ndjson({"type": "done", "ok": False, "duplicate": True,
+                           "record": _shape(dup)})
+            return
+        for ev in _run_scraper(url, category):
+            if ev["kind"] == "stage":
+                yield _ndjson({"type": "stage", "stage": ev["stage"], "message": ev["message"]})
+            elif ev["kind"] == "ok":
+                rel = ev["file"]
+                rec = _record_for_path(rel) or {}
+                yield _ndjson({
+                    "type": "done", "ok": True, "file": rel,
+                    "title": rec.get("title", ""),
+                    "channel": rec.get("channel", ""),
+                    "video_id": rec.get("video_id", video_id),
+                    "summary": rec.get("summary", ""),
+                    "category": category,
+                })
+                return
+            else:
+                yield _ndjson({"type": "done", "ok": False, "error": ev["error"]})
+                return
+
+    return Response(gen(), mimetype="application/x-ndjson")
+
+@app.route("/api/batch-scrape", methods=["POST"])
+def batch_scrape():
+    """Sequential batch over up to BATCH_MAX_URLS urls, streamed as NDJSON."""
+    data = request.get_json() or {}
+    urls = data.get("urls") or []
+    category = (data.get("category") or "sources").strip()
+    if not isinstance(urls, list):
+        urls = []
+    urls = [str(u).strip() for u in urls if str(u).strip()][:BATCH_MAX_URLS]
+
+    def gen():
+        if category not in CATEGORIES:
+            yield _ndjson({"type": "batch_done", "error": "unknown category",
+                           "summary": {"done": 0, "failed": 0, "duplicate": 0, "invalid": 0}})
+            return
+        if not urls:
+            yield _ndjson({"type": "batch_done", "error": "no urls",
+                           "summary": {"done": 0, "failed": 0, "duplicate": 0, "invalid": 0}})
+            return
+        total = len(urls)
+        tally = {"done": 0, "failed": 0, "duplicate": 0, "invalid": 0}
+        for i, url in enumerate(urls):
+            video_id = extract_video_id(url)
+            if not video_id:
+                tally["invalid"] += 1
+                yield _ndjson({"type": "item", "index": i, "url": url,
+                               "status": "invalid", "error": "not a YouTube URL"})
+                yield _ndjson({"type": "progress", "done": i + 1, "total": total})
+                continue
+            dup = _preflight_duplicate(url, video_id)
+            if dup:
+                tally["duplicate"] += 1
+                yield _ndjson({"type": "item", "index": i, "url": url, "status": "duplicate",
+                               "title": dup.get("title", ""), "record": _shape(dup)})
+                yield _ndjson({"type": "progress", "done": i + 1, "total": total})
+                continue
+            yield _ndjson({"type": "item", "index": i, "url": url, "status": "processing"})
+            title = ""
+            finished = False
+            for ev in _run_scraper(url, category):
+                if ev["kind"] == "stage":
+                    msg = ev["message"]
+                    if msg.startswith("Title:"):
+                        title = msg.split("Title:", 1)[1].strip()
+                elif ev["kind"] == "ok":
+                    rel = ev["file"]
+                    rec = _record_for_path(rel) or {}
+                    tally["done"] += 1
+                    finished = True
+                    yield _ndjson({"type": "item", "index": i, "url": url, "status": "done",
+                                   "title": rec.get("title", "") or title, "file": rel})
+                else:
+                    tally["failed"] += 1
+                    finished = True
+                    yield _ndjson({"type": "item", "index": i, "url": url,
+                                   "status": "failed", "error": ev["error"]})
+            if not finished:
+                tally["failed"] += 1
+                yield _ndjson({"type": "item", "index": i, "url": url,
+                               "status": "failed", "error": "scraper produced no result"})
+            yield _ndjson({"type": "progress", "done": i + 1, "total": total})
+        yield _ndjson({"type": "batch_done", "summary": tally})
+
+    return Response(gen(), mimetype="application/x-ndjson")
 
 @app.route("/recent")
 def recent():
@@ -299,6 +637,106 @@ def debug():
             info["honcho"] = str(e)[:40]
     return jsonify(info)
 
+def _honcho_probe(timeout=3):
+    key = os.environ.get("HONCHO_API_KEY", "")
+    if not key:
+        return False, "no honcho key"
+    try:
+        import urllib.request
+        payload = json.dumps({"conclusions": [{"content": "quarry health check", "observer_id": "hermes", "observed_id": "ishmael"}]}).encode()
+        req = urllib.request.Request(
+            HONCHO_URL, data=payload,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status in (200, 201), f"HTTP {resp.status}"
+    except Exception as e:
+        return False, str(e)[:80]
+
+def _ytdlp_version():
+    try:
+        r = subprocess.run([YTDLP, "--version"], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+@app.route("/api/health")
+def api_health():
+    vp = Path(VAULT)
+    if not vp.exists():
+        obsidian = {"ok": False, "detail": f"{VAULT} does not exist"}
+    elif not vp.is_dir():
+        obsidian = {"ok": False, "detail": f"{VAULT} is not a directory"}
+    elif not os.access(VAULT, os.W_OK):
+        obsidian = {"ok": False, "detail": f"{VAULT} is not writable"}
+    else:
+        obsidian = {"ok": True, "detail": VAULT}
+
+    hok, hdetail = _honcho_probe()
+    hermes = {"ok": hok, "detail": hdetail}
+
+    sp = Path(SCRAPER)
+    if not sp.exists():
+        worker = {"ok": False, "detail": f"{SCRAPER} not found"}
+    elif not os.access(SCRAPER, os.X_OK):
+        worker = {"ok": False, "detail": f"{SCRAPER} is not executable"}
+    else:
+        ver = _ytdlp_version()
+        detail = SCRAPER + (f" · yt-dlp {ver}" if ver else "")
+        worker = {"ok": True, "detail": detail}
+
+    return jsonify({"obsidian": obsidian, "hermes": hermes, "worker": worker,
+                    "version": HEALTH_VERSION})
+
+@app.route("/api/settings", methods=["GET", "POST"])
+def api_settings():
+    settings = _load_settings()
+    if request.method == "GET":
+        return jsonify(settings)
+    data = request.get_json() or {}
+    if "default_category" in data:
+        dc = str(data.get("default_category") or "").strip()
+        if dc not in CATEGORIES:
+            return jsonify({"error": "unknown category"}), 400
+        settings["default_category"] = dc
+    if "hermes_webui_url" in data:
+        hu = str(data.get("hermes_webui_url") or "").strip()
+        if not hu.startswith("http"):
+            return jsonify({"error": "hermes_webui_url must start with http"}), 400
+        settings["hermes_webui_url"] = hu
+    try:
+        _write_json_atomic(SETTINGS_FILE, settings)
+    except Exception as e:
+        return jsonify({"error": f"write failed: {e}"}), 500
+    return jsonify(settings)
+
+@app.route("/api/check")
+@app.route("/api/suggest")  # alias — /api/check is the canonical name
+def api_check():
+    """Paste-time probe: is this a video we already have, and where does it belong?"""
+    url = (request.args.get("url") or "").strip()
+    video_id = extract_video_id(url)
+    if not video_id:
+        return jsonify({"valid": False, "video_id": None})
+    records = _load_records()
+    dup = _find_by_video_id(records, video_id)
+    if dup:
+        return jsonify({"valid": True, "video_id": video_id, "duplicate": True,
+                        "record": _shape(dup)})
+    meta = _ytdlp_meta(url, video_id)
+    title = meta.get("title", "")
+    channel = meta.get("channel", "")
+    dup = _find_by_title_slug(records, title)
+    if dup:
+        return jsonify({"valid": True, "video_id": video_id, "duplicate": True,
+                        "record": _shape(dup)})
+    return jsonify({"valid": True, "video_id": video_id, "duplicate": False,
+                    "suggested_category": _suggest_category(records, channel),
+                    "title": title, "channel": channel})
+
 @app.route("/delete-scrape", methods=["POST"])
 def delete_scrape():
     data = request.get_json() or {}
@@ -376,8 +814,7 @@ def recategorize(item_id):
     item["updated_at"] = datetime.now(timezone.utc).isoformat()
     item["recategorized_at"] = datetime.now(timezone.utc).isoformat()
     _write_records_atomic(records)
-    cl = CATEGORIES.get(nc, {}).get("label", nc)
-    hok, herr = _update_honcho(item, cl)
+    hok, herr = _update_honcho(item, nc)
     item["honcho_sync_status"] = "synced" if hok else "pending"
     if herr:
         item["honcho_sync_error"] = herr
@@ -391,8 +828,7 @@ def honcho_sync(item_id):
     if not item:
         return jsonify({"success": False, "error": "not found"}), 404
     cat = item.get("category", "sources")
-    cl = CATEGORIES.get(cat, {}).get("label", cat)
-    ok, err = _update_honcho(item, cl)
+    ok, err = _update_honcho(item, cat)
     if ok:
         item["honcho_sync_status"] = "synced"
         item["honcho_sync_error"] = None

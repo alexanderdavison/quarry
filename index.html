@@ -16,9 +16,19 @@
   .sidebar .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 0.82rem; color: #88889a; cursor: pointer; border-radius: 6px; margin: 1px 8px; }
   .sidebar .nav-item:hover { background: #1e1e24; color: #e8e8ed; }
   .sidebar .nav-item.active { background: #8b5cf6; color: #fff; }
+  .sidebar-footer { margin-top: auto; padding: 10px 16px 14px; border-top: 1px solid #222228; display: flex; flex-direction: column; gap: 5px; position: relative; }
+  .health-row { display: flex; align-items: center; gap: 8px; font-size: 0.72rem; color: #88889a; padding: 2px 0; }
+  .health-row.bad { cursor: pointer; }
+  .health-row.bad:hover { color: #e8e8ed; }
+  .health-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .health-pop { position: absolute; left: 12px; right: 12px; bottom: 100%; margin-bottom: 6px; background: #18181d; border: 1px solid #222228; border-radius: 8px; padding: 10px 12px; font-size: 0.72rem; color: #88889a; z-index: 60; box-shadow: 0 8px 24px rgba(0,0,0,0.55); }
+  .health-pop .hp-name { color: #e8e8ed; font-weight: 600; margin-bottom: 4px; }
+  .health-pop .hp-detail { word-break: break-word; margin-bottom: 8px; }
   .main { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
   .header { display: flex; align-items: center; gap: 12px; padding: 12px 24px; border-bottom: 1px solid #222228; min-height: 52px; }
   .header .breadcrumb { font-size: 0.85rem; color: #88889a; }
+  .icon-btn { color: #88889a; font-size: 16px; line-height: 1; padding: 5px 8px; border-radius: 6px; }
+  .icon-btn:hover { color: #e8e8ed; background: #1e1e24; }
   .content { flex: 1; padding: 24px; overflow-y: auto; }
   .page { display: none; }
   .page.active { display: block; }
@@ -44,6 +54,28 @@
   .toast-success { background: #22c55e; color: #fff; }
   .toast-error { background: #ef4444; color: #fff; }
   .toast-warning { background: #f59e0b; color: #fff; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 100px; font-size: 0.7rem; font-weight: 600; }
+  .rt-title { color: #e8e8ed; font-weight: 500; }
+  .rt-title:hover { color: #a47cf6; }
+  .rt-sub { font-size: 0.72rem; color: #555566; margin-top: 2px; }
+  .rt-actions { opacity: 0; transition: opacity 0.12s; white-space: nowrap; display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
+  tr:hover .rt-actions, tr.menu-open .rt-actions { opacity: 1; }
+  .rt-act { font-size: 0.75rem; color: #88889a; }
+  .rt-act:hover { color: #a47cf6; }
+  .rt-menu-wrap { position: relative; display: inline-block; }
+  .rt-menu { position: absolute; right: 0; top: 100%; margin-top: 4px; min-width: 140px; background: #18181d; border: 1px solid #222228; border-radius: 8px; padding: 4px; z-index: 70; box-shadow: 0 8px 24px rgba(0,0,0,0.55); }
+  .rt-menu button { display: block; width: 100%; text-align: left; padding: 6px 10px; font-size: 0.78rem; color: #88889a; border-radius: 6px; }
+  .rt-menu button:hover { background: #1e1e24; color: #e8e8ed; }
+  textarea { background: #18181d; border: 1px solid #222228; color: #e8e8ed; border-radius: 6px; padding: 10px 12px; outline: none; font-family: inherit; font-size: 0.85rem; resize: vertical; }
+  textarea:focus { border-color: #8b5cf6; }
+  .stage-step { color: #555566; }
+  .stage-step.active { color: #a47cf6; text-decoration: underline; }
+  .stage-step.done { color: #3f3f4a; }
+  .card { background: #141418; border: 1px solid #222228; border-radius: 8px; padding: 16px; }
+  .set-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid #1c1c22; font-size: 0.82rem; }
+  .set-row:last-child { border-bottom: none; }
+  .set-row .set-label { color: #88889a; }
+  .set-row .set-value { color: #e8e8ed; text-align: right; word-break: break-word; }
 </style>
 </head>
 <body>
@@ -51,26 +83,23 @@
 <div class="sidebar" id="sidebar">
   <div class="brand"><img src="/logo.svg" alt=""><span>Quarry</span></div>
   <div class="section">Content</div>
-  <div class="nav-item active" onclick="navigate('home');return false">Home</div>
-  <div class="nav-item" onclick="navigate('recent');return false">Recent</div>
-  <div class="nav-item" onclick="navigate('library');return false">Library</div>
-  <div class="nav-item" onclick="navigate('categories');return false">Categories</div>
-  <div class="nav-item" onclick="navigate('tags');return false">Tags</div>
-  <div class="nav-item" onclick="navigate('stats');return false">Stats</div>
-  <div class="nav-item" onclick="navigate('activity');return false">Activity</div>
-  <div class="nav-item" onclick="navigate('settings');return false">Settings</div>
+  <div class="nav-item active" data-page="home" onclick="navigate('home');return false">Home</div>
+  <div class="nav-item" data-page="recent" onclick="navigate('recent');return false">Recent</div>
+  <div class="nav-item" data-page="library" onclick="navigate('library');return false">Library</div>
+  <div class="nav-item" data-page="categories" onclick="navigate('categories');return false">Categories</div>
+  <div class="nav-item" data-page="tags" onclick="navigate('tags');return false">Tags</div>
+  <div class="section">Import</div>
+  <div class="nav-item" data-page="import" onclick="navigate('import');return false">Batch Import</div>
   <div class="section">System</div>
-  <div class="nav-item" onclick="navigate('jobs');return false">Jobs</div>
-  <div class="nav-item" onclick="navigate('system-status');return false">System</div>
-  <div class="section">Quick Actions</div>
-  <div class="nav-item" onclick="navigate('import');return false">Import</div>
-  <div class="nav-item" onclick="navigate('vault');return false">Vault</div>
-  <div class="nav-item" onclick="navigate('memory');return false">Memory</div>
+  <div class="nav-item" data-page="jobs" onclick="navigate('jobs');return false">Jobs</div>
+  <div class="nav-item" data-page="activity" onclick="navigate('activity');return false">Activity</div>
+  <div class="sidebar-footer" id="sidebar-health"></div>
 </div>
 
 <div class="main">
   <div class="header">
     <div class="breadcrumb" id="breadcrumb">Quarry</div>
+    <button class="icon-btn" id="header-gear" title="Settings" style="margin-left:auto" onclick="navigate('settings');return false">&#9881;</button>
   </div>
   <div class="content">
 
@@ -99,7 +128,7 @@
 <div class="page" id="page-settings"><h2>Settings</h2><div id="settings-load"></div></div>
 <div class="page" id="page-jobs"><h2>Jobs</h2><div id="jobs-load"></div></div>
 <div class="page" id="page-system-status"><h2>System</h2><div id="sys-status-checks"></div></div>
-<div class="page" id="page-import"><h2>Import</h2><div id="import-load"></div></div>
+<div class="page" id="page-import"><h2>Batch Import</h2><div id="import-load"></div></div>
 <div class="page" id="page-vault"><h2>Vault</h2><div id="vault-load"></div></div>
 <div class="page" id="page-memory"><h2>Memory</h2><div id="memory-load"></div></div>
 
@@ -144,7 +173,7 @@ function navigate(page) {
   }
   document.querySelectorAll(".nav-item").forEach(function(n) {
     n.classList.remove("active");
-    if (n.textContent.toLowerCase().trim() === page.replace("-", " ") || n.textContent.toLowerCase().trim() === page) {
+    if (n.dataset.page === page) {
       n.classList.add("active");
     }
   });
@@ -200,6 +229,94 @@ async function api(url, opts) {
   }
 }
 
+// NDJSON stream reader. api() parses one JSON body, which the streaming
+// endpoints (/scrape, /api/batch-scrape) never send — use this for those.
+async function streamNdjson(url, opts, onLine) {
+  var r = await fetch(url, opts || {});
+  if (!r.body) {
+    var text = await r.text();
+    text.split("\n").forEach(function(l) {
+      if (l.trim()) { try { onLine(JSON.parse(l)); } catch(e) {} }
+    });
+    return;
+  }
+  var reader = r.body.getReader();
+  var decoder = new TextDecoder();
+  var buf = "";
+  while (true) {
+    var chunk = await reader.read();
+    if (chunk.done) break;
+    buf += decoder.decode(chunk.value, { stream: true });
+    var parts = buf.split("\n");
+    buf = parts.pop();
+    parts.forEach(function(l) {
+      if (l.trim()) { try { onLine(JSON.parse(l)); } catch(e) {} }
+    });
+  }
+  if (buf.trim()) { try { onLine(JSON.parse(buf)); } catch(e) {} }
+}
+
+// Same extraction rules as the scraper and webui.
+function extractVideoId(u) {
+  var s = String(u || "").trim();
+  var m = s.match(/(?:v=|\/v\/|youtu\.be\/|shorts\/|embed\/|live\/)([a-zA-Z0-9_-]{11})/);
+  if (m) return m[1];
+  m = s.match(/^([a-zA-Z0-9_-]{11})$/);
+  return m ? m[1] : null;
+}
+
+function isYoutubeHost(u) {
+  return /^(https?:\/\/)?([a-z0-9-]+\.)*(youtube\.com|youtu\.be)\//i.test(String(u || "").trim());
+}
+
+// "12m ago", "1h ago", "2d ago" from a unix timestamp in seconds.
+// Counts by subtraction rather than division: check_js_balance.py reads a bare
+// "/" as the start of a regex literal, so the script stays division-free.
+var TIME_UNITS = [
+  { n: 31536000, u: "y" },
+  { n: 2592000, u: "mo" },
+  { n: 86400, u: "d" },
+  { n: 3600, u: "h" },
+  { n: 60, u: "m" }
+];
+
+function timeAgo(ts) {
+  var t = Number(ts) || 0;
+  if (!t) return "—";
+  var s = Math.floor(Date.now() * 0.001) - Math.floor(t);
+  if (s < 0) s = 0;
+  for (var i = 0; i < TIME_UNITS.length; i++) {
+    var unit = TIME_UNITS[i];
+    if (s < unit.n) continue;
+    var count = 0;
+    var rem = s;
+    while (rem >= unit.n) { rem -= unit.n; count++; }
+    return count + unit.u + " ago";
+  }
+  return s + "s ago";
+}
+
+// App settings (default destination + Ask Hermes target)
+var appSettings = { default_category: "sources", hermes_webui_url: "http://192.168.1.22:8787" };
+var settingsLoaded = false;
+
+async function loadAppSettings(force) {
+  if (settingsLoaded && !force) return appSettings;
+  var d = await api("/api/settings");
+  if (d && d.default_category) {
+    appSettings = d;
+    if (!settingsLoaded && CATEGORIES.indexOf(d.default_category) >= 0) {
+      selectedCategory = d.default_category;
+    }
+  }
+  settingsLoaded = true;
+  return appSettings;
+}
+
+function hermesUrl() {
+  return appSettings.hermes_webui_url || "http://192.168.1.22:8787";
+}
+
 // Build a /view/ URL, escaping each path segment but keeping the separators
 function viewUrl(p) {
   return "/view/" + String(p || "").split("/").map(function(seg) {
@@ -215,6 +332,61 @@ function cleanFileTitle(name) {
   return t || String(name || "");
 }
 
+// Sidebar health footer — polls /api/health, red rows open a detail popover.
+var healthData = null;
+var healthOpen = null;
+var HEALTH_SERVICES = [
+  { key: "obsidian", label: "Obsidian" },
+  { key: "hermes", label: "Hermes" },
+  { key: "worker", label: "Worker" }
+];
+
+async function loadHealth() {
+  var d = await api("/api/health");
+  healthData = d && d.obsidian ? d : null;
+  renderHealth();
+}
+
+function renderHealth() {
+  var el = document.getElementById("sidebar-health");
+  if (!el) return;
+  var html = "";
+  HEALTH_SERVICES.forEach(function(svc) {
+    var s = (healthData && healthData[svc.key]) || { ok: false, detail: "unknown" };
+    var color = s.ok ? "#22c55e" : "#f87171";
+    html += "<div class='health-row" + (s.ok ? "" : " bad") + "'" +
+      (s.ok ? "" : " onclick='toggleHealthDetail(\"" + svc.key + "\");event.stopPropagation()'") + ">";
+    html += "<span class='health-dot' style='background:" + color + "'></span>";
+    html += "<span>" + esc(svc.label) + "</span>";
+    html += "</div>";
+  });
+  if (healthOpen) {
+    var svc = null;
+    HEALTH_SERVICES.forEach(function(x) { if (x.key === healthOpen) svc = x; });
+    var s = (healthData && healthData[healthOpen]) || null;
+    if (svc && s && !s.ok) {
+      html += "<div class='health-pop'>";
+      html += "<div class='hp-name'>" + esc(svc.label) + "</div>";
+      html += "<div class='hp-detail'>" + esc(s.detail || "unavailable") + "</div>";
+      html += "<button class='rt-act' onclick='closeHealthDetail();navigate(\"settings\")'>Open Settings</button>";
+      html += "</div>";
+    } else {
+      healthOpen = null;
+    }
+  }
+  el.innerHTML = html;
+}
+
+function toggleHealthDetail(key) {
+  healthOpen = (healthOpen === key) ? null : key;
+  renderHealth();
+}
+
+function closeHealthDetail() {
+  healthOpen = null;
+  renderHealth();
+}
+
 // Pills — the bucket selector. Shared by every scrape form on the page.
 function renderPills(wrapId) {
   var wrap = document.getElementById(wrapId);
@@ -225,19 +397,61 @@ function renderPills(wrapId) {
     p.className = "pill" + (cat === selectedCategory ? " active" : "");
     p.textContent = CATEGORY_LABELS[cat] || cat;
     p.dataset.v = cat;
-    p.onclick = function() { setSelectedCategory(cat); };
+    p.onclick = function() { setSelectedCategory(cat, true); };
     wrap.appendChild(p);
   });
+  applySuggestionRing();
 }
 
-function setSelectedCategory(cat) {
+function setSelectedCategory(cat, manual) {
   selectedCategory = cat;
+  if (manual) clearSuggestion();
   document.querySelectorAll(".scrape-pills .pill").forEach(function(x) {
     x.className = "pill" + (x.dataset.v === cat ? " active" : "");
+    x.style.boxShadow = "";
+  });
+  if (!manual) applySuggestionRing();
+}
+
+// ── Capture (Home) ─────────────────────────────────────────────
+// Paste-time state. Reset whenever the typed URL changes.
+var suggestedCategory = null;
+var pasteDuplicate = null;
+var pillTouched = false;
+var checkTimer = null;
+var lastCheckedUrl = "";
+
+var STAGE_STEPS = [
+  { label: "Extracting transcript" },
+  { label: "Creating note" },
+  { label: "Saving to Obsidian" },
+  { label: "Indexing Hermes" }
+];
+var STAGE_INDEX = { "metadata": 0, "transcript": 0, "note": 1, "save": 2, "honcho": 3 };
+
+function clearSuggestion() {
+  suggestedCategory = null;
+  applySuggestionRing();
+}
+
+function applySuggestionRing() {
+  document.querySelectorAll(".scrape-pills .pill").forEach(function(x) {
+    x.style.boxShadow = (suggestedCategory && x.dataset.v === suggestedCategory) ? "0 0 0 1px #8b5cf6" : "";
+  });
+  document.querySelectorAll(".scrape-suggest").forEach(function(el) {
+    el.textContent = suggestedCategory
+      ? "Suggested: " + (CATEGORY_LABELS[suggestedCategory] || suggestedCategory) : "";
   });
 }
 
-// Scrape form — rendered on both Home and Import.
+function setProcessEnabled(containerId, on) {
+  var btn = document.getElementById(containerId + "-btn");
+  if (!btn) return;
+  btn.disabled = !on;
+  btn.style.opacity = on ? "" : "0.5";
+}
+
+// Scrape form — the Home capture bar.
 // Child ids are derived from containerId, so "home" yields #home-result.
 function renderScrapeForm(containerId) {
   var wrap = document.getElementById(containerId);
@@ -246,89 +460,198 @@ function renderScrapeForm(containerId) {
   var h = "<div style='background:#141418;border:1px solid #222228;border-radius:10px;padding:20px;margin-bottom:20px'>";
   h += "<div style='display:flex;gap:10px;align-items:center'>";
   h += "<input id='" + containerId + "-url' placeholder='Paste YouTube link...' style='flex:1;font-size:1rem;padding:12px 14px'>";
-  h += "<button id='" + containerId + "-btn' class='btn btn-primary' style='padding:12px 20px;font-size:0.9rem;white-space:nowrap'>Transcribe &amp; Save</button>";
+  h += "<button id='" + containerId + "-btn' class='btn btn-primary' style='padding:12px 20px;font-size:0.9rem;white-space:nowrap'>Process</button>";
   h += "</div>";
-  h += "<div style='font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:#555566;font-weight:600;margin:16px 0 6px'>Save to:</div>";
+  h += "<div id='" + containerId + "-notice'></div>";
+  h += "<div style='display:flex;align-items:baseline;gap:10px;margin:16px 0 6px'>";
+  h += "<div style='font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:#555566;font-weight:600'>Save to:</div>";
+  h += "<div class='scrape-suggest' id='" + containerId + "-suggest' style='font-size:0.7rem;color:#a47cf6'></div>";
+  h += "</div>";
   h += "<div class='scrape-pills' id='" + containerId + "-pills' style='display:flex;gap:6px;flex-wrap:wrap'></div>";
   h += "</div>";
+  h += "<div id='" + containerId + "-status'></div>";
   h += "<div id='" + containerId + "-result'></div>";
   wrap.innerHTML = h;
   renderPills(containerId + "-pills");
   document.getElementById(containerId + "-btn").onclick = function() {
     submitScrape(containerId);
   };
-  document.getElementById(containerId + "-url").onkeydown = function(e) {
+  var inp = document.getElementById(containerId + "-url");
+  inp.onkeydown = function(e) {
     if (e.key === "Enter") { e.preventDefault(); submitScrape(containerId); }
+  };
+  inp.oninput = function() {
+    if (checkTimer) clearTimeout(checkTimer);
+    if ((inp.value || "").trim() !== lastCheckedUrl) {
+      pasteDuplicate = null;
+      pillTouched = false;
+      renderPasteNotice(containerId, null);
+      setProcessEnabled(containerId, true);
+    }
+    checkTimer = setTimeout(function() { checkPastedUrl(containerId); }, 500);
   };
 }
 
-async function submitScrape(containerId) {
+// Debounced paste probe — flags duplicates and pre-selects a destination.
+async function checkPastedUrl(containerId) {
+  var inp = document.getElementById(containerId + "-url");
+  if (!inp) return;
+  var url = (inp.value || "").trim();
+  if (!url || url === lastCheckedUrl) return;
+  lastCheckedUrl = url;
+  var d = await api("/api/check?url=" + encodeURIComponent(url));
+  if ((inp.value || "").trim() !== url) return; // user kept typing
+  if (!d || !d.valid) {
+    pasteDuplicate = null;
+    renderPasteNotice(containerId, null);
+    setProcessEnabled(containerId, true);
+    return;
+  }
+  if (d.duplicate) {
+    pasteDuplicate = d.record || null;
+    renderPasteNotice(containerId, pasteDuplicate);
+    setProcessEnabled(containerId, false);
+    return;
+  }
+  pasteDuplicate = null;
+  renderPasteNotice(containerId, null);
+  setProcessEnabled(containerId, true);
+  if (!pillTouched && d.suggested_category && CATEGORIES.indexOf(d.suggested_category) >= 0) {
+    suggestedCategory = d.suggested_category;
+    applySuggestionRing();
+  }
+}
+
+function renderPasteNotice(containerId, rec) {
+  var el = document.getElementById(containerId + "-notice");
+  if (!el) return;
+  if (!rec) { el.innerHTML = ""; return; }
+  var h = "<div style='display:flex;align-items:center;gap:10px;font-size:0.78rem;color:#f59e0b;margin-top:10px'>";
+  h += "<span>Already processed</span>";
+  if (rec.path) {
+    h += "<a class='rt-act' style='color:#a47cf6' href='" + viewUrl(rec.path) + "' target='_blank'>[Open]</a>";
+  }
+  h += "</div>";
+  el.innerHTML = h;
+}
+
+function renderStages(containerId, activeIdx) {
+  var el = document.getElementById(containerId + "-status");
+  if (!el) return;
+  var parts = [];
+  STAGE_STEPS.forEach(function(s, i) {
+    var cls = i < activeIdx ? "done" : (i === activeIdx ? "active" : "");
+    parts.push("<span class='stage-step " + cls + "'>" + esc(s.label) + "</span>");
+  });
+  el.innerHTML = "<div style='background:#141418;border:1px solid #222228;border-radius:8px;padding:12px 16px;" +
+    "margin-bottom:20px;font-size:0.78rem;display:flex;gap:8px;flex-wrap:wrap;align-items:center'>" +
+    parts.join("<span style='color:#333340'>&#8594;</span>") + "</div>";
+}
+
+async function submitScrape(containerId, retryUrl) {
   var input = document.getElementById(containerId + "-url");
   var btn = document.getElementById(containerId + "-btn");
   var res = document.getElementById(containerId + "-result");
   if (!input || !btn) return;
-  var url = (input.value || "").trim();
+  var url = retryUrl || (input.value || "").trim();
   if (!url) { showToast("Paste a YouTube link first", "warning"); return; }
+  if (!retryUrl && pasteDuplicate) { showToast("Already processed", "warning"); return; }
   var cat = selectedCategory;
   var catLabel = CATEGORY_LABELS[cat] || cat;
   btn.disabled = true;
-  btn.textContent = "Transcribing...";
-  if (res) {
-    res.innerHTML = "<div style='background:#141418;border:1px solid #222228;border-radius:8px;padding:16px;color:#88889a;font-size:0.82rem'>Transcribing into " + esc(catLabel) + "...</div>";
+  btn.textContent = "Processing...";
+  if (res) res.innerHTML = "";
+  var stageIdx = -1;
+  renderStages(containerId, stageIdx);
+  var done = null;
+  try {
+    await streamNdjson("/scrape", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: url, category: cat })
+    }, function(msg) {
+      if (msg.type === "stage") {
+        var i = STAGE_INDEX[msg.stage];
+        if (typeof i === "number" && i > stageIdx) {
+          stageIdx = i;
+          renderStages(containerId, stageIdx);
+        }
+      } else if (msg.type === "done") {
+        done = msg;
+      }
+    });
+  } catch(e) {
+    done = { ok: false, error: String(e) };
   }
-  var d = await api("/scrape", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: url, category: cat })
-  });
   btn.disabled = false;
-  btn.textContent = "Transcribe & Save";
-  if (d && d.ok) {
+  btn.textContent = "Process";
+  var status = document.getElementById(containerId + "-status");
+  if (status) status.innerHTML = "";
+  if (done && done.ok) {
     input.value = "";
-    // /scrape returns only {file, summary}; title + channel live on the recent record
+    lastCheckedUrl = "";
+    pasteDuplicate = null;
+    pillTouched = false;
+    clearSuggestion();
+    renderPasteNotice(containerId, null);
+    renderScrapeSuccess(containerId, done, catLabel);
+    showToast("Added to " + catLabel, "success");
     var rd = await api("/recent");
     scrapesData = rd.scrapes || [];
-    var rec = null;
-    scrapesData.forEach(function(s) { if (!rec && s.path === d.file) rec = s; });
-    renderScrapeResult(containerId, d, rec, catLabel);
-    showToast("Saved to " + catLabel, "success");
     renderHomeRecent();
+  } else if (done && done.duplicate) {
+    pasteDuplicate = done.record || null;
+    renderPasteNotice(containerId, pasteDuplicate);
+    setProcessEnabled(containerId, false);
+    showToast("Already processed", "warning");
   } else {
-    var err = (d && d.error) || "Scrape failed";
+    var err = (done && done.error) || "Processing failed";
+    renderScrapeFailure(containerId, stageIdx, err, url);
     showToast(err, "error");
-    if (res) {
-      res.innerHTML = "<div style='background:#141418;border:1px solid #f87171;border-radius:8px;padding:16px'>" +
-        "<div style='font-weight:600;color:#f87171;margin-bottom:6px'>Scrape failed</div>" +
-        "<div style='font-size:0.8rem;color:#88889a;white-space:pre-wrap'>" + esc(err) + "</div></div>";
-    }
   }
 }
 
-function renderScrapeResult(containerId, d, rec, catLabel) {
+function renderScrapeSuccess(containerId, d, catLabel) {
   var res = document.getElementById(containerId + "-result");
   if (!res) return;
   var file = d.file || "";
-  var title = (rec && rec.title) || cleanFileTitle(file.split("/").pop().replace(/\.md$/, ""));
-  var channel = (rec && rec.channel) || "";
-  var summary = (rec && rec.summary) || d.summary || "";
-  var h = "<div style='background:#141418;border:1px solid #22c55e;border-radius:8px;padding:16px'>";
-  h += "<div style='font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:#22c55e;font-weight:600;margin-bottom:8px'>Saved to " + esc(catLabel) + "</div>";
-  h += "<div style='font-weight:600;font-size:1rem'>" + esc(title) + "</div>";
-  if (channel) {
-    h += "<div style='font-size:0.78rem;color:#555566;margin-top:2px'>" + esc(channel) + "</div>";
+  var title = d.title || cleanFileTitle(file.split("/").pop().replace(/\.md$/, ""));
+  var h = "<div style='margin-bottom:20px'>";
+  if (title) {
+    h += "<div style='font-size:0.75rem;color:#88889a;margin-bottom:4px'>" + esc(title) + "</div>";
   }
-  if (summary) {
-    h += "<div style='font-size:0.82rem;color:#88889a;margin-top:10px'>" + esc(summary) + "</div>";
-  }
+  h += "<div style='display:flex;align-items:center;gap:10px;font-size:0.82rem'>";
+  h += "<span style='color:#22c55e;font-weight:600'>&#10003; Added to " + esc(catLabel) + "</span>";
   if (file) {
-    h += "<div style='margin-top:12px'><a class='btn btn-ghost' href='" + viewUrl(file) + "' target='_blank'>View note</a></div>";
+    h += "<a class='rt-act' href='" + viewUrl(file) + "' target='_blank'>Open Note</a>";
   }
+  h += "<span style='color:#333340'>&middot;</span>";
+  h += "<a class='rt-act' href='" + escAttr(hermesUrl()) + "' target='_blank'>Ask Hermes</a>";
+  h += "</div></div>";
+  res.innerHTML = h;
+}
+
+function renderScrapeFailure(containerId, stageIdx, err, url) {
+  var res = document.getElementById(containerId + "-result");
+  if (!res) return;
+  var head = "Processing failed";
+  if (stageIdx === 3) head = "Hermes indexing failed";
+  else if (stageIdx >= 0) head = STAGE_STEPS[stageIdx].label + " failed";
+  var h = "<div style='background:#141418;border:1px solid #f87171;border-radius:8px;padding:16px;margin-bottom:20px'>";
+  h += "<div style='font-weight:600;color:#f87171;margin-bottom:6px'>" + esc(head) + "</div>";
+  h += "<div style='font-size:0.75rem;color:#88889a;white-space:pre-wrap;margin-bottom:10px'>" + esc(err) + "</div>";
+  h += "<button class='btn btn-ghost' onclick='retryScrape(\"" + encodeURIComponent(containerId) + "\",\"" + encodeURIComponent(url) + "\")'>Retry</button>";
   h += "</div>";
   res.innerHTML = h;
 }
 
+function retryScrape(containerId, url) {
+  submitScrape(decodeURIComponent(containerId), decodeURIComponent(url));
+}
+
 // Home
 async function loadHome() {
+  await loadAppSettings();
   renderScrapeForm("home");
   var d = await api("/recent");
   scrapesData = d.scrapes || [];
@@ -342,12 +665,7 @@ function renderHomeRecent() {
     list.innerHTML = "<div class='empty-state'><h3>No scrapes yet</h3><p>Submit a YouTube URL to get started.</p></div>";
     return;
   }
-  var html = "<h3 style='margin:16px 0 8px'>Recent</h3><table><thead><tr><th>Title</th><th>Channel</th><th>Category</th></tr></thead><tbody>";
-  scrapesData.slice(0, 5).forEach(function(s) {
-    html += "<tr><td>" + esc(s.title) + "</td><td>" + esc(s.channel) + "</td><td>" + esc(CATEGORY_LABELS[s.category] || s.category) + "</td></tr>";
-  });
-  html += "</tbody></table>";
-  list.innerHTML = html;
+  list.innerHTML = "<h3 style='margin:16px 0 8px'>Recent</h3>" + renderRecentTable(scrapesData.slice(0, 5));
 }
 
 // Recent
@@ -374,25 +692,94 @@ async function loadRecent() {
 function renderRecent() {
   var wrap = document.getElementById("recent-table-wrap");
   var filter = document.getElementById("recent-filter");
-  if (filter) {
-    var fv = filter.value;
-    var items = scrapesData;
-    if (fv !== "all") items = items.filter(function(s) { return s.category === fv; });
-    if (items.length === 0) {
-      wrap.innerHTML = "<div class='empty-state'><h3>No items</h3></div>";
-      return;
-    }
-    var html = "<table><thead><tr><th>Title</th><th>Channel</th><th>Category</th><th>Actions</th></tr></thead><tbody>";
-    items.forEach(function(s) {
-      html += "<tr><td>" + esc(s.title) + "</td><td>" + esc(s.channel) + "</td><td>" + esc(CATEGORY_LABELS[s.category] || s.category) + "</td>";
-      html += "<td style='display:flex;gap:4px'>";
-      html += "<button class='btn btn-ghost btn-sm' onclick='openMoveModal(\"" + s.id + "\",\"" + s.category + "\")'>Move</button>";
-      html += "<button class='btn btn-danger btn-sm' onclick='deleteRecent(\"" + s.id + "\")'>Delete</button>";
-      html += "</td></tr>";
-    });
-    html += "</tbody></table>";
-    wrap.innerHTML = html;
+  if (!wrap || !filter) return;
+  var fv = filter.value;
+  var items = scrapesData;
+  if (fv !== "all") items = items.filter(function(s) { return s.category === fv; });
+  if (items.length === 0) {
+    wrap.innerHTML = "<div class='empty-state'><h3>No items</h3></div>";
+    return;
   }
+  wrap.innerHTML = renderRecentTable(items);
+}
+
+// One renderer for both the Home preview table and the Recent page.
+var STATUS_BADGES = {
+  "synced":  { label: "Ready",      color: "#22c55e" },
+  "pending": { label: "Processing", color: "#f59e0b" },
+  "failed":  { label: "Failed",     color: "#ef4444" }
+};
+
+var openRowMenu = null;
+
+function renderRecentTable(items) {
+  var html = "<table><thead><tr><th>Title</th><th>Destination</th><th>Status</th><th>Added</th><th></th></tr></thead><tbody>";
+  items.forEach(function(s, i) {
+    var st = s.honcho_sync_status || "synced";
+    var badge = STATUS_BADGES[st] || { label: st, color: "#555566" };
+    var rid = encodeURIComponent(s.id || "");
+    html += "<tr" + (openRowMenu === i ? " class='menu-open'" : "") + ">";
+    html += "<td><a class='rt-title' href='" + viewUrl(s.path) + "' target='_blank'>" + esc(s.title) + "</a>";
+    if (s.channel) html += "<div class='rt-sub'>" + esc(s.channel) + "</div>";
+    html += "</td>";
+    html += "<td>" + esc(CATEGORY_LABELS[s.category] || s.category) + "</td>";
+    html += "<td><span class='badge' style='background:" + badge.color + ";color:#fff'>" + esc(badge.label) + "</span></td>";
+    html += "<td>" + esc(timeAgo(s.timestamp)) + "</td>";
+    html += "<td><div class='rt-actions'>";
+    html += "<a class='rt-act' href='" + viewUrl(s.path) + "' target='_blank'>Open Note</a>";
+    html += "<a class='rt-act' href='" + escAttr(hermesUrl()) + "' target='_blank'>Ask Hermes</a>";
+    html += "<button class='rt-act' onclick='rowMove(\"" + rid + "\",\"" + encodeURIComponent(s.category || "") + "\")'>Move</button>";
+    html += "<span class='rt-menu-wrap'>";
+    html += "<button class='rt-act' onclick='toggleRowMenu(" + i + ");event.stopPropagation()'>More</button>";
+    if (openRowMenu === i) {
+      html += "<span class='rt-menu'>";
+      html += "<button onclick='closeRowMenus();rowDelete(\"" + rid + "\")'>Delete</button>";
+      if (st !== "synced") {
+        html += "<button onclick='closeRowMenus();rowRetryHoncho(\"" + rid + "\")'>Retry Honcho</button>";
+      }
+      html += "</span>";
+    }
+    html += "</span>";
+    html += "</div></td></tr>";
+  });
+  html += "</tbody></table>";
+  return html;
+}
+
+function toggleRowMenu(i) {
+  openRowMenu = (openRowMenu === i) ? null : i;
+  refreshRecentTables();
+}
+
+function closeRowMenus() {
+  if (openRowMenu === null) return;
+  openRowMenu = null;
+  refreshRecentTables();
+}
+
+function refreshRecentTables() {
+  renderHomeRecent();
+  if (document.getElementById("recent-filter")) renderRecent();
+}
+
+async function reloadRecentData() {
+  var d = await api("/recent");
+  scrapesData = d.scrapes || [];
+  refreshRecentTables();
+}
+
+// Row action wrappers — ids arrive URL-encoded from the onclick attribute.
+function rowMove(id, cat) {
+  openMoveModal(decodeURIComponent(id), decodeURIComponent(cat));
+}
+
+function rowDelete(id) {
+  deleteRecent(decodeURIComponent(id));
+}
+
+async function rowRetryHoncho(id) {
+  await retryHonchoSync(id);
+  await reloadRecentData();
 }
 
 // Library
@@ -456,7 +843,7 @@ async function deleteRecent(id) {
   });
   if (d.ok) {
     showToast("Deleted", "success");
-    loadRecent();
+    reloadRecentData();
   } else {
     showToast(d.error || "Delete failed", "error");
   }
@@ -537,9 +924,99 @@ async function loadSystemStatus() {
   document.getElementById("sys-status-checks").innerHTML = html;
 }
 
-// Settings
+// ── Settings ───────────────────────────────────────────────────
+var CATEGORY_PATHS = {
+  "sources": "sources/youtube/", "shared": "shared/youtube/",
+  "homelab-wiki": "homelab-wiki/youtube/", "personal-wiki": "personal-wiki/youtube/",
+  "ish-d": "ish-d/youtube/", "real-estate": "real-estate/youtube/",
+  "dental-msp": "dental-msp/youtube/", "axiom-music": "axiom-music/youtube/"
+};
+var HONCHO_ENDPOINT = "http://192.168.1.23:8000";
+var SCRAPER_PATH = "/opt/quarry/quarry";
+var VAULT_PATH = "/mnt/obsidian-vault";
+
+function healthLine(s) {
+  if (!s) return "<span style='color:#555566'>unknown</span>";
+  var color = s.ok ? "#22c55e" : "#f87171";
+  return "<span style='color:" + color + "'>&#9679; " + esc(s.ok ? "OK" : "Down") + "</span>" +
+    "<span style='color:#555566'> &middot; " + esc(s.detail || "") + "</span>";
+}
+
 async function loadSettings() {
-  document.getElementById("settings-load").innerHTML = "<p>Settings panel loaded. Configure default category, vault path, and Honcho settings here.</p>";
+  var el = document.getElementById("settings-load");
+  if (!el) return;
+  el.innerHTML = "<p style='color:#555566;font-size:0.82rem'>Loading settings...</p>";
+  await loadAppSettings(true);
+  var health = await api("/api/health");
+  var dbg = await api("/debug");
+
+  var h = "<div style='display:flex;flex-direction:column;gap:16px;max-width:720px'>";
+
+  h += "<div class='card'>";
+  h += "<div class='set-row'><span class='set-label'>Default destination</span>";
+  h += "<select id='set-default-cat' style='min-width:180px'>";
+  CATEGORIES.forEach(function(c) {
+    h += "<option value='" + c + "'" + (c === appSettings.default_category ? " selected" : "") + ">" +
+      esc(CATEGORY_LABELS[c] || c) + "</option>";
+  });
+  h += "</select></div>";
+  h += "<div class='set-row'><span class='set-label'>Hermes WebUI URL</span>";
+  h += "<input id='set-hermes-url' style='min-width:280px' value='" + escAttr(appSettings.hermes_webui_url) + "'></div>";
+  h += "</div>";
+
+  h += "<div class='card'>";
+  h += "<div class='set-row'><span class='set-label'>Obsidian vault</span><span class='set-value'>" + esc(VAULT_PATH) + "</span></div>";
+  h += "<div class='set-row'><span class='set-label'>Mount status</span><span class='set-value'>" + healthLine(health && health.obsidian) + "</span></div>";
+  h += "<div class='set-row'><span class='set-label'>Hermes (Honcho)</span><span class='set-value'>" + esc(HONCHO_ENDPOINT) + "</span></div>";
+  h += "<div class='set-row'><span class='set-label'>Hermes status</span><span class='set-value'>" + healthLine(health && health.hermes) + "</span></div>";
+  h += "<div class='set-row'><span class='set-label'>Transcript provider</span><span class='set-value'>youtube-transcript-api</span></div>";
+  h += "</div>";
+
+  h += "<div class='card'>";
+  h += "<div class='set-row'><span class='set-label'>Scraper</span><span class='set-value'>" + esc(SCRAPER_PATH) + "</span></div>";
+  h += "<div class='set-row'><span class='set-label'>Worker status</span><span class='set-value'>" + healthLine(health && health.worker) + "</span></div>";
+  h += "<div class='set-row'><span class='set-label'>yt-dlp</span><span class='set-value'>" + esc((dbg && dbg.ytdlp_version) || "?") + "</span></div>";
+  h += "<div class='set-row'><span class='set-label'>Scrapes recorded</span><span class='set-value'>" + ((dbg && dbg.scrape_count) || 0) + "</span></div>";
+  h += "<div class='set-row'><span class='set-label'>Retry behavior</span><span class='set-value'>Retry via item actions</span></div>";
+  h += "<div class='set-row'><span class='set-label'>Version</span><span class='set-value'>" + esc((health && health.version) || "?") + "</span></div>";
+  h += "</div>";
+
+  h += "<div class='card'>";
+  h += "<div style='font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:#555566;font-weight:600;margin-bottom:8px'>Category &#8594; folder</div>";
+  h += "<table><tbody>";
+  CATEGORIES.forEach(function(c) {
+    h += "<tr><td style='color:#e8e8ed'>" + esc(CATEGORY_LABELS[c] || c) + "</td><td>" + esc(CATEGORY_PATHS[c] || "") + "</td></tr>";
+  });
+  h += "</tbody></table></div>";
+
+  h += "</div>";
+  el.innerHTML = h;
+
+  document.getElementById("set-default-cat").onchange = function() {
+    saveSetting({ default_category: this.value });
+  };
+  document.getElementById("set-hermes-url").onchange = function() {
+    saveSetting({ hermes_webui_url: (this.value || "").trim() });
+  };
+}
+
+async function saveSetting(patch) {
+  var d = await api("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch)
+  });
+  if (d && d.default_category) {
+    appSettings = d;
+    if (patch.default_category) {
+      setSelectedCategory(d.default_category, true);
+      renderPills("home-pills");
+      renderPills("batch-pills");
+    }
+    showToast("Saved", "success");
+  } else {
+    showToast((d && d.error) || "Save failed", "error");
+  }
 }
 
 // Stats
@@ -571,9 +1048,200 @@ function loadActivity() {
   document.getElementById("activity-load").innerHTML = html;
 }
 
-// Import — same scrape form as Home
-function loadImport() {
-  renderScrapeForm("import-load");
+// ── Batch Import ───────────────────────────────────────────────
+var BATCH_MAX = 20;
+var batchItems = [];   // display model, one per submitted url
+var batchRunning = false;
+
+var BATCH_STATUS = {
+  "queued":     { label: "Queued",     color: "#555566" },
+  "processing": { label: "Processing", color: "#f59e0b" },
+  "done":       { label: "Ready",      color: "#22c55e" },
+  "failed":     { label: "Failed",     color: "#ef4444" },
+  "skipped":    { label: "Skipped",    color: "#555566" }
+};
+
+async function loadImport() {
+  await loadAppSettings();
+  var el = document.getElementById("import-load");
+  if (!el) return;
+  var h = "<div style='background:#141418;border:1px solid #222228;border-radius:10px;padding:20px;margin-bottom:20px'>";
+  h += "<textarea id='batch-urls' rows='7' style='width:100%' placeholder='Paste one YouTube URL per line...'></textarea>";
+  h += "<div id='batch-counts' style='font-size:0.75rem;color:#555566;margin-top:8px'>0 valid links &middot; 0 duplicate &middot; 0 invalid</div>";
+  h += "<div style='font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;color:#555566;font-weight:600;margin:16px 0 6px'>Save to:</div>";
+  h += "<div class='scrape-pills' id='batch-pills' style='display:flex;gap:6px;flex-wrap:wrap'></div>";
+  h += "<div style='margin-top:16px'><button id='batch-btn' class='btn btn-primary' style='padding:10px 18px'>Process 0 Videos</button></div>";
+  h += "</div>";
+  h += "<div id='batch-list'></div>";
+  el.innerHTML = h;
+  renderPills("batch-pills");
+  document.getElementById("batch-urls").oninput = batchRecount;
+  document.getElementById("batch-btn").onclick = function() {
+    var parsed = batchParse();
+    var urls = parsed.filter(function(p) { return p.valid && !p.duplicate; }).map(function(p) { return p.url; });
+    if (!urls.length) { showToast("No new valid links", "warning"); return; }
+    batchItems = parsed.map(function(p) {
+      return {
+        url: p.url,
+        title: "",
+        status: p.valid ? (p.duplicate ? "skipped" : "queued") : "skipped",
+        reason: p.valid ? (p.duplicate ? "Already processed" : "") : "Not a YouTube URL"
+      };
+    });
+    renderBatchList();
+    batchRun(urls);
+  };
+  var d = await api("/recent");
+  scrapesData = d.scrapes || [];
+  batchRecount();
+}
+
+// Client-side pre-check. The backend re-validates and is authoritative.
+function batchParse() {
+  var ta = document.getElementById("batch-urls");
+  var lines = ((ta && ta.value) || "").split("\n");
+  var out = [];
+  var seen = {};
+  lines.forEach(function(raw) {
+    var url = raw.trim();
+    if (!url || out.length >= BATCH_MAX) return;
+    var vid = extractVideoId(url);
+    var valid = !!vid && isYoutubeHost(url);
+    var dup = false;
+    if (valid) {
+      if (seen[vid]) dup = true;
+      seen[vid] = true;
+      if (!dup) dup = knownVideoId(vid);
+    }
+    out.push({ url: url, valid: valid, duplicate: dup, video_id: vid });
+  });
+  return out;
+}
+
+function knownVideoId(vid) {
+  var hit = false;
+  scrapesData.forEach(function(s) {
+    if (hit || !vid) return;
+    if (s.video_id === vid) hit = true;
+    else if (s.url && s.url.indexOf(vid) >= 0) hit = true;
+  });
+  return hit;
+}
+
+function batchRecount() {
+  var parsed = batchParse();
+  var valid = 0, dup = 0, bad = 0;
+  parsed.forEach(function(p) {
+    if (!p.valid) bad++;
+    else if (p.duplicate) dup++;
+    else valid++;
+  });
+  var counts = document.getElementById("batch-counts");
+  if (counts) {
+    counts.textContent = valid + " valid link" + (valid === 1 ? "" : "s") +
+      " · " + dup + " duplicate · " + bad + " invalid";
+  }
+  var btn = document.getElementById("batch-btn");
+  if (btn && !batchRunning) {
+    btn.textContent = "Process " + valid + " Video" + (valid === 1 ? "" : "s");
+    btn.disabled = valid === 0;
+    btn.style.opacity = valid === 0 ? "0.5" : "";
+  }
+}
+
+function batchItemFor(url) {
+  var found = null;
+  batchItems.forEach(function(it) { if (!found && it.url === url) found = it; });
+  return found;
+}
+
+async function batchRun(urls) {
+  var btn = document.getElementById("batch-btn");
+  batchRunning = true;
+  if (btn) { btn.disabled = true; btn.textContent = "Processing..."; btn.style.opacity = "0.5"; }
+  urls.forEach(function(u) {
+    var it = batchItemFor(u);
+    if (it) { it.status = "queued"; it.reason = ""; }
+  });
+  renderBatchList();
+  try {
+    await streamNdjson("/api/batch-scrape", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urls: urls, category: selectedCategory })
+    }, function(msg) {
+      if (msg.type !== "item") return;
+      var it = batchItemFor(urls[msg.index]);
+      if (!it) return;
+      if (msg.title) it.title = msg.title;
+      if (msg.status === "invalid") { it.status = "skipped"; it.reason = msg.error || "Not a YouTube URL"; }
+      else if (msg.status === "duplicate") { it.status = "skipped"; it.reason = "Already processed"; }
+      else if (msg.status === "processing") { it.status = "processing"; it.reason = ""; }
+      else if (msg.status === "done") { it.status = "done"; it.reason = ""; it.file = msg.file || ""; }
+      else if (msg.status === "failed") { it.status = "failed"; it.reason = msg.error || "Failed"; }
+      renderBatchList();
+    });
+  } catch(e) {
+    urls.forEach(function(u) {
+      var it = batchItemFor(u);
+      if (it && (it.status === "queued" || it.status === "processing")) {
+        it.status = "failed";
+        it.reason = String(e);
+      }
+    });
+  }
+  batchItems.forEach(function(it) {
+    if (it.status === "queued" || it.status === "processing") {
+      it.status = "failed";
+      it.reason = it.reason || "Stream ended before this item finished";
+    }
+  });
+  batchRunning = false;
+  renderBatchList();
+  batchRecount();
+  await reloadRecentData();
+}
+
+function retryBatchFailed() {
+  if (batchRunning) return;
+  var urls = [];
+  batchItems.forEach(function(it) { if (it.status === "failed") urls.push(it.url); });
+  if (!urls.length) { showToast("Nothing to retry", "warning"); return; }
+  batchRun(urls.slice(0, BATCH_MAX));
+}
+
+function renderBatchList() {
+  var el = document.getElementById("batch-list");
+  if (!el) return;
+  if (batchItems.length === 0) { el.innerHTML = ""; return; }
+  var failed = 0;
+  batchItems.forEach(function(it) { if (it.status === "failed") failed++; });
+  var h = "<div style='display:flex;flex-direction:column;gap:6px'>";
+  batchItems.forEach(function(it) {
+    var b = BATCH_STATUS[it.status] || BATCH_STATUS.queued;
+    h += "<div style='display:flex;align-items:center;gap:12px;padding:9px 12px;background:#141418;border:1px solid #222228;border-radius:6px'>";
+    h += "<div style='flex:1;min-width:0'>";
+    h += "<div style='font-size:0.8rem;color:#e8e8ed;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>" +
+      esc(it.title || it.url) + "</div>";
+    if (it.title) {
+      h += "<div class='rt-sub' style='overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>" + esc(it.url) + "</div>";
+    }
+    if (it.reason) {
+      h += "<div class='rt-sub' style='color:#7a6a45'>" + esc(it.reason) + "</div>";
+    }
+    h += "</div>";
+    if (it.status === "done" && it.file) {
+      h += "<a class='rt-act' href='" + viewUrl(it.file) + "' target='_blank'>Open Note</a>";
+    }
+    h += "<span class='badge' style='background:" + b.color + ";color:#fff'>" + esc(b.label) + "</span>";
+    h += "</div>";
+  });
+  h += "</div>";
+  if (failed > 0 && !batchRunning) {
+    h += "<div style='margin-top:12px'><button class='btn btn-ghost' onclick='retryBatchFailed()'>Retry " +
+      failed + " failed</button></div>";
+  }
+  el.innerHTML = h;
 }
 
 // Vault
@@ -680,11 +1348,22 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// esc() leaves quotes alone; attribute values need them escaped too.
+function escAttr(s) {
+  return esc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 // Init
 document.addEventListener("DOMContentLoaded", function() {
   handleHash();
   window.addEventListener("hashchange", handleHash);
+  document.addEventListener("click", function(e) {
+    if (!e.target.closest || !e.target.closest(".rt-menu-wrap")) closeRowMenus();
+    if (!e.target.closest || !e.target.closest(".sidebar-footer")) closeHealthDetail();
+  });
   loadHome();
+  loadHealth();
+  setInterval(loadHealth, 30000);
 });
 </script>
 </body>

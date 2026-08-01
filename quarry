@@ -163,7 +163,7 @@ def fetch_transcript(video_id: str) -> tuple[list[str] | None, str | None]:
 
 def write_vault_note(title: str, channel: str, url: str, date: str,
                      duration: str, views: int, description: str,
-                     transcript_text: str, category: str) -> Path:
+                     transcript_text: str, category: str, video_id: str) -> Path:
     """Write a markdown note to the vault."""
     outdir = Path(VAULT) / category / "youtube"
     outdir.mkdir(parents=True, exist_ok=True)
@@ -189,6 +189,7 @@ def write_vault_note(title: str, channel: str, url: str, date: str,
         f.write(f'title: "{title}"\n')
         f.write("source: youtube\n")
         f.write(f'url: "{url}"\n')
+        f.write(f"video_id: {video_id}\n")
         f.write(f'channel: "{channel}"\n')
         f.write(f'date: "{date}"\n')
         f.write(f'duration: "{duration}"\n')
@@ -255,7 +256,8 @@ def seed_honcho(workspace: str, title: str, channel: str, url: str,
 
 
 def update_recent(title: str, channel: str, category: str,
-                  vault_path: str, one_sentence: str) -> None:
+                  vault_path: str, one_sentence: str,
+                  video_id: str, url: str) -> None:
     """Append to the recent scrapes log."""
     recent = []
     recent_file = Path(RECENT_FILE)
@@ -273,6 +275,8 @@ def update_recent(title: str, channel: str, category: str,
         "path": vault_path,
         "summary": one_sentence,
         "timestamp": time.time(),
+        "video_id": video_id,
+        "url": url,
     })
 
     # Keep last 50
@@ -305,6 +309,7 @@ def main() -> None:
     print(f"  Video ID: {video_id}")
 
     # ── Step 2: Get metadata ──
+    print("STAGE:metadata")
     print("  Fetching metadata...")
     meta = get_metadata(url)
 
@@ -320,6 +325,7 @@ def main() -> None:
     print(f'  Duration: {duration}')
 
     # ── Step 3: Fetch transcript ──
+    print("STAGE:transcript")
     print("  Fetching transcript...")
     transcript_lines, transcript_error = fetch_transcript(video_id)
 
@@ -335,6 +341,7 @@ def main() -> None:
     print(f"  Summary: {summary}")
 
     # ── Step 5: Write vault note ──
+    print("STAGE:note")
     print("  Writing vault note...")
     outfile = write_vault_note(
         title=title,
@@ -346,6 +353,7 @@ def main() -> None:
         description=description,
         transcript_text=transcript_text,
         category=category,
+        video_id=video_id,
     )
 
     relpath = str(outfile.relative_to(VAULT))
@@ -353,6 +361,7 @@ def main() -> None:
 
     # ── Step 6: Seed Honcho memory ──
     workspace = CATEGORY_WORKSPACE_MAP[category]
+    print("STAGE:honcho")
     print(f"  Seeding Honcho ({workspace})...")
     seed_honcho(
         workspace=workspace,
@@ -365,7 +374,7 @@ def main() -> None:
     )
 
     # ── Step 7: Update recent log ──
-    update_recent(title, channel, category, relpath, summary)
+    update_recent(title, channel, category, relpath, summary, video_id, url)
 
     # ── Final output (WebUI parses this) ──
     print(f"Written: {outfile}")
