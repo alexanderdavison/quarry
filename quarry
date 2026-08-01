@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -269,6 +270,7 @@ def update_recent(title: str, channel: str, category: str,
             recent = []
 
     recent.insert(0, {
+        "id": str(uuid.uuid4()),
         "title": title,
         "channel": channel,
         "category": category,
