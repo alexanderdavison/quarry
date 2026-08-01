@@ -30,7 +30,21 @@ VAULT = "/mnt/obsidian-vault"
 VENV = "/opt/scraper-venv"
 RECENT_FILE = "/opt/quarry/recent.json"
 HONCHO_BASE = "http://192.168.1.23:8000"
-HONCHO_API_KEY = os.environ.get("HONCHO_API_KEY", "") or open("/opt/quarry/.env").read().strip()
+
+
+def _read_env_key(name: str) -> str:
+    """Read a KEY=value line from /opt/quarry/.env (multi-line safe)."""
+    try:
+        for line in open("/opt/quarry/.env"):
+            line = line.strip()
+            if line.startswith(name + "="):
+                return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return ""
+
+
+HONCHO_API_KEY = os.environ.get("HONCHO_API_KEY", "") or _read_env_key("HONCHO_API_KEY")
 
 CATEGORY_WORKSPACE_MAP = {
     "sources":         "hermes",

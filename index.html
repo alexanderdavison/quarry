@@ -426,9 +426,10 @@ var STAGE_STEPS = [
   { label: "Extracting transcript" },
   { label: "Creating note" },
   { label: "Saving to Obsidian" },
-  { label: "Indexing Hermes" }
+  { label: "Indexing Hermes" },
+  { label: "Distilling knowledge" }
 ];
-var STAGE_INDEX = { "metadata": 0, "transcript": 0, "note": 1, "save": 2, "honcho": 3 };
+var STAGE_INDEX = { "metadata": 0, "transcript": 0, "note": 1, "save": 2, "honcho": 3, "distill": 4 };
 
 function clearSuggestion() {
   suggestedCategory = null;

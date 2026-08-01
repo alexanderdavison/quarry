@@ -33,7 +33,8 @@ It scrapes YouTube videos into an Obsidian vault and seeds Honcho memory.
 ## Scraper facts (quarry)
 - `CATEGORY_WORKSPACE_MAP` maps category → Honcho workspace: sources/shared/homelab-wiki/personal-wiki → "hermes", real-estate → "hermes_real-estate", dental-msp → "hermes_dental-msp", axiom-music → "hermes_axiom-music", ish-d → "hermes_ish-d" (wired 2026-07-31).
 - The scraper validates category against this map and dies on unknown ones.
-- Reads HONCHO_API_KEY from `/opt/quarry/.env` (don't touch). Writes vault notes with chown wyandotte:wyandotte chmod 644.
+- Reads HONCHO_API_KEY from `/opt/quarry/.env` via `_read_env_key()` — **the file is multi-line KEY=value format since 2026-08-01** (HONCHO_API_KEY, DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL). Do NOT add a line without an `=` prefix, and do NOT break the trailing-newline discipline (a missing final newline glued lines together once — that was a real incident). Writes vault notes with chown wyandotte:wyandotte chmod 644.
+- Same-time distillation: after a successful scrape, webui.py runs `_distill_note()` — DeepSeek key points → `{category}/youtube/_knowledge-index.md` upsert → distilled Honcho conclusion (self-healing peers) → `distilled: true` frontmatter marker. The stream emits a `distill` stage between `honcho` and `done`; batch-scrape distills each item inline. The `.22` cron (`vault-knowledge-distill`, 06:30 UTC) only sweeps notes WITHOUT the marker (manual/legacy) and merges into the index rather than re-rendering it.
 - Prints `STAGE:metadata` / `STAGE:transcript` / `STAGE:note` / `STAGE:honcho` before each step so webui can map the stream to stages (added 2026-08-01). It prints `Written:` **twice** — indented mid-run, then unindented as the final line; webui keys success off the unindented one.
 - Note frontmatter: title, source, url, video_id, channel, date, duration, views. Records get video_id + url.
 
