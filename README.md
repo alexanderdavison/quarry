@@ -23,7 +23,7 @@ Scrapes YouTube videos into permanent, searchable Obsidian notes (metadata + ful
 | personal-wiki | `personal-wiki/youtube/` | `hermes` |
 | ish-d | `ish-d/youtube/` | `hermes_ish-d` |
 | real-estate | `real-estate/youtube/` | `hermes_real-estate` |
-| dental-msp | `dental-msp/youtube/` | `hermes_dental-msp` |
+| dental-msp | `dental-msp/youtube/` | `hermes_relaystone-systems` |
 | axiom-music | `axiom-music/youtube/` | `hermes_axiom-music` |
 
 Vault docs are seeded into per-profile Honcho workspaces by `seed-vault-to-honcho.sh` (Hermes cron `vault-honcho-seed`, 06:00 UTC).

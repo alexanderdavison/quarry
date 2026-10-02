@@ -9,8 +9,14 @@ Categories map to vault subdirectories and Honcho workspaces:
     sources, shared, homelab-wiki, personal-wiki  →  hermes (homelab)
     ish-d                                          →  hermes_ish-d
     real-estate                                    →  hermes_real-estate
-    dental-msp                                     →  hermes_dental-msp
+    relaystone-systems                             →  hermes_relaystone-systems
     axiom-music                                    →  hermes_axiom-music
+
+The pre-2026-09-22 name `dental-msp` is RETIRED (profile+vault renamed to
+relaystone-systems). Quarry wrote into `hermes_dental-msp` until 2026-09-26, when the MSP memory was
+migrated to `hermes_relaystone-systems`; the old workspace is kept only as an
+archive. The category -> workspace map loads from WORKSPACE_MAP_FILE (vault), so it
+cannot drift from the webUI/distill-job copies again.
 """
 
 import json
@@ -46,16 +52,40 @@ def _read_env_key(name: str) -> str:
 
 HONCHO_API_KEY = os.environ.get("HONCHO_API_KEY", "") or _read_env_key("HONCHO_API_KEY")
 
-CATEGORY_WORKSPACE_MAP = {
+
+
+WORKSPACE_MAP_FILE = "/mnt/obsidian-vault/.quarry/categories.json"
+
+
+def _load_workspace_map(default):
+    """Category -> Honcho workspace, from ONE vault-hosted file shared by Quarry's two
+    entry points and the daily distill job on .22 (they had drifted apart). Falls back
+    to the built-in literal if the file is missing or unreadable: a config read must
+    never break ingest. Never raises."""
+    try:
+        with open(WORKSPACE_MAP_FILE) as fh:
+            m = (json.load(fh) or {}).get("workspace_map") or {}
+        clean = {k: v for k, v in m.items() if isinstance(k, str) and isinstance(v, str) and v}
+        if clean:
+            return clean
+    except Exception:
+        pass
+    return dict(default)
+
+
+_DEFAULT_WORKSPACE_MAP = {
     "sources":         "hermes",
     "shared":          "hermes",
     "homelab-wiki":    "hermes",
     "personal-wiki":   "hermes",
     "ish-d":           "hermes_ish-d",
     "real-estate":     "hermes_real-estate",
-    "dental-msp":      "hermes_dental-msp",
+    "relaystone-systems": "hermes_relaystone-systems",
     "axiom-music":     "hermes_axiom-music",
+    "videoprod":       "hermes",
 }
+
+CATEGORY_WORKSPACE_MAP = _load_workspace_map(_DEFAULT_WORKSPACE_MAP)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -229,6 +259,52 @@ def write_vault_note(title: str, channel: str, url: str, date: str,
     return outfile
 
 
+
+def _ensure_peers(workspace):
+    """Register the peers a write needs BEFORE writing.
+
+    A write whose peer is missing returns 404, and the first such 404 has been observed
+    to wedge the conclusions endpoint server-side: every later write hangs, on every
+    workspace, until honcho-api is restarted, while /health keeps answering 200.
+    POST /peers is idempotent. Never raises."""
+    for peer in ("hermes", "ishmael"):
+        try:
+            preq = urllib.request.Request(
+                f"{HONCHO_BASE}/v3/workspaces/{workspace}/peers",
+                data=json.dumps({"name": peer}).encode(),
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer {HONCHO_API_KEY}"},
+                method="POST")
+            with urllib.request.urlopen(preq, timeout=90):
+                pass
+        except Exception:
+            pass
+
+
+def _post_ingest_message(workspace, category, title, vault_relpath, one_sentence):
+    """v1.5: mirror the ingest summary as a MESSAGE, not only a conclusion.
+
+    Honcho builds what an agent KNOWS from messages; conclusions are inert memory atoms.
+    POST .../sessions/<id>/messages auto-creates the session. Never raises."""
+    NL = chr(10)
+    content = ("Scraped YouTube video into vault: " + title + NL + NL
+               + one_sentence + NL + NL + "(vault: " + vault_relpath + ")")
+    try:
+        payload = json.dumps({"messages": [{"peer_id": "hermes",
+                                            "content": content[:4000]}]}).encode()
+        req = urllib.request.Request(
+            f"{HONCHO_BASE}/v3/workspaces/{workspace}/sessions/vault-{category}/messages",
+            data=payload,
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {HONCHO_API_KEY}"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            if resp.status not in (200, 201):
+                print(f"  [honcho] message warning: HTTP {resp.status}", file=sys.stderr)
+    except Exception as e:
+        print(f"  [honcho] message warning: {e}", file=sys.stderr)
+
+
 def seed_honcho(workspace: str, title: str, channel: str, url: str,
                 category: str, vault_relpath: str, one_sentence: str) -> None:
     """Write a compact conclusion to Honcho for future Hermes recall."""
@@ -252,6 +328,7 @@ def seed_honcho(workspace: str, title: str, channel: str, url: str,
         }]
     }
 
+    _ensure_peers(workspace)
     try:
         data = json.dumps(payload).encode()
         req = urllib.request.Request(
@@ -263,9 +340,10 @@ def seed_honcho(workspace: str, title: str, channel: str, url: str,
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=90) as resp:
             if resp.status not in (200, 201):
                 print(f"  [honcho] warning: HTTP {resp.status}", file=sys.stderr)
+        _post_ingest_message(workspace, category, title, vault_relpath, one_sentence)
     except Exception as e:
         print(f"  [honcho] warning: could not seed memory: {e}", file=sys.stderr)
 

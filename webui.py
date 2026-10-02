@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Quarry — YouTube scraper + memory seeder. Single-file app."""
 
-import subprocess, os, html, json, uuid, shutil, tempfile, re, threading, urllib.error, urllib.request
+import subprocess, os, html, json, uuid, shutil, tempfile, re, threading, time, urllib.error, urllib.request
 from pathlib import Path
 from datetime import datetime, timezone
 from flask import Flask, request, render_template_string, jsonify, send_file, Response
@@ -20,17 +20,41 @@ HEALTH_VERSION = "2026-08-01"
 SCRAPE_TIMEOUT = 120
 BATCH_MAX_URLS = 20
 
-# Mirrors CATEGORY_WORKSPACE_MAP in the scraper — keep the two in sync.
-CATEGORY_WORKSPACE_MAP = {
+# Category -> Honcho workspace: see WORKSPACE_MAP_FILE (single source of truth).
+
+
+WORKSPACE_MAP_FILE = "/mnt/obsidian-vault/.quarry/categories.json"
+
+
+def _load_workspace_map(default):
+    """Category -> Honcho workspace, from ONE vault-hosted file shared by Quarry's two
+    entry points and the daily distill job on .22 (they had drifted apart). Falls back
+    to the built-in literal if the file is missing or unreadable: a config read must
+    never break ingest. Never raises."""
+    try:
+        with open(WORKSPACE_MAP_FILE) as fh:
+            m = (json.load(fh) or {}).get("workspace_map") or {}
+        clean = {k: v for k, v in m.items() if isinstance(k, str) and isinstance(v, str) and v}
+        if clean:
+            return clean
+    except Exception:
+        pass
+    return dict(default)
+
+
+_DEFAULT_WORKSPACE_MAP = {
     "sources":         "hermes",
     "shared":          "hermes",
     "homelab-wiki":    "hermes",
     "personal-wiki":   "hermes",
     "ish-d":           "hermes_ish-d",
     "real-estate":     "hermes_real-estate",
-    "dental-msp":      "hermes_dental-msp",
+    "relaystone-systems": "hermes_relaystone-systems",
     "axiom-music":     "hermes_axiom-music",
+    "videoprod":       "hermes",
 }
+
+CATEGORY_WORKSPACE_MAP = _load_workspace_map(_DEFAULT_WORKSPACE_MAP)
 
 def _read_env_key(name):
     """Read a KEY=value line from /opt/quarry/.env (multi-line safe)."""
@@ -60,8 +84,9 @@ CATEGORIES = {
     "personal-wiki":{"label":"Personal",    "path": "personal-wiki/youtube/"},
     "ish-d":       {"label": "Ish D",       "path": "ish-d/youtube/"},
     "real-estate": {"label": "Real Estate",  "path": "real-estate/youtube/"},
-    "dental-msp":  {"label": "Dental",       "path": "dental-msp/youtube/"},
+    "relaystone-systems": {"label": "Relay Stone Systems", "path": "relaystone-systems/youtube/"},
     "axiom-music": {"label": "Axiom",        "path": "axiom-music/youtube/"},
+    "videoprod":   {"label": "videoprod",  "path": "videoprod/youtube/"},
 }
 
 # ── Helpers ────────────────────────────────────────────────────
@@ -325,12 +350,211 @@ def _record_for_path(rel):
 
 # ── Same-time distillation ─────────────────────────────────────
 
+# Coverage knobs. The 2026-09 pipeline read only the FIRST 6000 chars of a transcript,
+# asked for "3-5" points and hard-stopped at five — an 18-minute video advertising
+# "eight moves" distilled to one. Now every chunk is mined, the video's own promised
+# structure is extracted first as a skeleton, and nothing is truncated to five.
+DISTILL_CHUNK_CHARS = 24000    # transcript chars per LLM call (~20 min of speech)
+DISTILL_CHUNK_OVERLAP = 600    # overlap, so a point split across a boundary survives
+DISTILL_MAX_CHUNKS = 10        # ceiling — beyond this the tail is left to the daily sweep
+DISTILL_MAX_POINTS = 80        # sanity ceiling, NOT a summary cap
+DISTILL_MAX_TOKENS = 6000      # output budget per call (was 500 — it truncated the tail)
+
+_COUNT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+                "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
+_STRUCTURE_UNITS = ("moves", "steps", "stages", "things", "items", "tips", "ways",
+                    "lessons", "rules", "phases", "pillars", "questions", "mistakes",
+                    "reasons", "keys", "components", "elements")
+
+
+def _stated_count(*texts):
+    """'...these eight specific moves' -> (8, 'moves'); None when no structure is promised.
+
+    Drives the skeleton pass. A video that advertises eight items is exactly the case the
+    old distiller collapsed into a single bullet."""
+    blob = " ".join(t for t in texts if t)[:4000].lower()
+    nums = "|".join(_COUNT_WORDS)
+    pat = re.compile(r"\b(" + nums + r"|\d{1,2})\s+(?:[a-z-]+\s+){0,2}?("
+                     + "|".join(_STRUCTURE_UNITS) + r")\b")
+    m = pat.search(blob)
+    if not m:
+        return None
+    raw, unit = m.group(1), m.group(2)
+    n = int(raw) if raw.isdigit() else _COUNT_WORDS[raw]
+    return (n, unit) if 2 <= n <= 20 else None
+
+
+def _chunk_transcript(body, size=DISTILL_CHUNK_CHARS, overlap=DISTILL_CHUNK_OVERLAP,
+                      max_chunks=DISTILL_MAX_CHUNKS):
+    """Split a transcript into line-aligned chunks so none of it is never read."""
+    body = (body or "").strip()
+    if not body:
+        return []
+    if len(body) <= size:
+        return [body]
+    chunks, start = [], 0
+    while start < len(body) and len(chunks) < max_chunks:
+        end = min(len(body), start + size)
+        if end < len(body):
+            nl = body.rfind("\n", start + size // 2, end)
+            if nl > 0:
+                end = nl
+        chunks.append(body[start:end])
+        if end >= len(body):
+            break
+        start = max(end - overlap, start + 1)
+    return chunks
+
+
+def _norm_point(text):
+    """Normalise a bullet for de-duplication, dropping any leading list numbering."""
+    text = re.sub(r"^\s*\d+\s*[.)]\s*", "", (text or ""))
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _merge_points(points, fresh, cap=DISTILL_MAX_POINTS):
+    """Append bullets, dropping the near-duplicates the chunk overlap produces."""
+    seen = {_norm_point(p) for p in points}
+    for pt in fresh:
+        if len(points) >= cap:
+            break
+        key = _norm_point(pt)
+        if len(key) < 25:
+            continue
+        if any(key in s or s in key for s in seen if len(s) >= 25):
+            continue
+        points.append(pt)
+        seen.add(key)
+    return points
+
+
+def _deepseek_bullets(prompt, timeout=300):
+    """One DeepSeek call -> (bullets, error). Never raises.
+
+    NOTE: deepseek-v4-flash bills its reasoning tokens out of the SAME max_tokens budget,
+    so an undersized budget returns an EMPTY completion with finish_reason=length rather
+    than a short one (~1.6k reasoning tokens observed per call). Do not lower
+    DISTILL_MAX_TOKENS toward the expected answer length."""
+    if not DEEPSEEK_KEY:
+        return [], "no deepseek key"
+    payload = json.dumps({
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            {"role": "system", "content": "You extract concise key points from video transcripts. Output plain bullet lines only."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2, "max_tokens": DISTILL_MAX_TOKENS,
+    }).encode()
+    req = urllib.request.Request(
+        f"{DEEPSEEK_BASE}/chat/completions", data=payload,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_KEY}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+        choice = (data.get("choices") or [{}])[0]
+        out = (choice.get("message", {}).get("content") or "").strip()
+        if not out:
+            usage = data.get("usage", {}) or {}
+            return [], (f"empty completion (finish_reason={choice.get('finish_reason')}, "
+                        f"reasoning={usage.get('completion_tokens_details', {}).get('reasoning_tokens')} tokens)")
+    except Exception as e:
+        return [], f"{type(e).__name__} {str(e)[:80]}"
+    bullets = []
+    for line in out.splitlines():
+        line = line.strip().lstrip("-*•").strip()
+        if line and len(line) > 8 and not line.lower().startswith(("key points", "here", "section ")):
+            bullets.append(line)
+    return bullets, None
+
+
+def _outline_points(title, description, body, n, unit):
+    """Skeleton pass: the video's own n items, one bullet each, in the speaker's order."""
+    prompt = (
+        f"This video states that it covers {n} {unit}.\n\n"
+        f"Title: {title}\nDescription: {(description or '')[:1500]}\n\n"
+        f"Transcript:\n{body[:DISTILL_CHUNK_CHARS * 2]}\n\n"
+        f"List those {n} {unit} in the order the speaker gives them. One bullet each, "
+        f"starting with the item's own number and name, then a short gloss of what he says "
+        f"about it. Never merge two {unit} into one bullet and never add a {unit} he did "
+        f"not give. Bullets only, no preamble, no commentary."
+    )
+    return _deepseek_bullets(prompt)
+
+
+def _extract_points(title, channel, description, body):
+    """Full-coverage extraction -> (bullets in video order, errors).
+
+    Order: the skeleton (the video's promised items) first, then every detail bullet the
+    transcript yields. A failed chunk is skipped rather than aborting the note, and its
+    reason lands in `errors` so partial coverage is visible instead of silent."""
+    points, errors = [], []
+    stated = _stated_count(description, title, body[:1500])
+    if stated:
+        n, unit = stated
+        skeleton, err = _outline_points(title, description, body, n, unit)
+        if err:
+            errors.append(f"skeleton: {err}")
+        _merge_points(points, skeleton)
+    chunks = _chunk_transcript(body)
+    for i, chunk in enumerate(chunks, 1):
+        where = "" if len(chunks) == 1 else f" (section {i} of {len(chunks)})"
+        prompt = (
+            f"You are mining a YouTube video transcript into a knowledge base{where}.\n\n"
+            f"Title: {title}\nChannel: {channel}\n"
+            f"Description: {(description or '')[:1500]}\n\n"
+            f"Transcript:\n{chunk}\n\n"
+            "Extract EVERY distinct point the speaker makes IN THIS TEXT, in the order "
+            "they make them. Do not summarise the video as a whole — mine this text.\n"
+            "Rules:\n"
+            "- One bullet per distinct point, starting with '- '.\n"
+            "- If the video or its description states a number of items (e.g. \"eight "
+            "moves\", \"five stages\", \"3 things\"), each item MUST get its own bullet. "
+            "Never merge two items into one bullet.\n"
+            "- Keep each bullet under 30 words, but keep the specifics: numbers, prices, "
+            "tool names, steps.\n"
+            "- Include every point you can find in this text. More bullets beats a "
+            "missing point.\n"
+            "- Skip housekeeping: like/subscribe asks, sponsor reads, channel plugs, links "
+            "to other videos, and personal asides with no advice in them.\n"
+            "- Do not split one idea across several bullets and do not pad.\n"
+            "- Output bullets only: no preamble, no headers, no commentary."
+        )
+        fresh, err = _deepseek_bullets(prompt)
+        if err:
+            errors.append(f"section {i}: {err}")
+            continue
+        _merge_points(points, fresh)
+    return points, errors
+
+
+def _ensure_peers(workspace):
+    """Register the peers a conclusion/message write needs, BEFORE writing.
+
+    A write whose peer is missing returns 404 — and the first such 404 has been observed
+    to wedge the conclusions endpoint server-side: every later write hangs, on every
+    workspace, until honcho-api is restarted, while /health keeps answering 200.
+    POST /peers is idempotent. Never raises (the writer reports the real outcome)."""
+    for peer in ("hermes", "ishmael"):
+        try:
+            preq = urllib.request.Request(
+                f"{HONCHO_BASE}/v3/workspaces/{workspace}/peers",
+                data=json.dumps({"name": peer}).encode(),
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer {HONCHO_KEY}"},
+                method="POST")
+            with urllib.request.urlopen(preq, timeout=45):
+                pass
+        except Exception:
+            pass
+
 def _post_conclusion(workspace, title, rel, points):
     """POST a distilled conclusion; self-heal missing peers. Returns (ok, err)."""
     content = (f"Quarry distilled video knowledge: {title}. "
-               f"Key points: {' | '.join(points[:5])} (vault: {rel})")
+               f"Key points: {' | '.join(points[:12])} (vault: {rel})")
     payload = json.dumps({"conclusions": [{
-        "content": content[:900], "observer_id": "hermes", "observed_id": "ishmael",
+        "content": content[:1200], "observer_id": "hermes", "observed_id": "ishmael",
     }]}).encode()
 
     def post():
@@ -340,27 +564,23 @@ def _post_conclusion(workspace, title, rel, points):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with urllib.request.urlopen(req, timeout=45) as resp:
                 return resp.status in (200, 201), None
         except urllib.error.HTTPError as e:
             return False, e.read().decode()[:150]
         except Exception as e:
             return False, str(e)[:100]
 
-    ok, err = post()
-    if not ok and err and "not found in workspace" in err:
-        try:
-            for peer in ("hermes", "ishmael"):
-                preq = urllib.request.Request(
-                    f"{HONCHO_BASE}/v3/workspaces/{workspace}/peers", data=json.dumps({"name": peer}).encode(),
-                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {HONCHO_KEY}"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(preq, timeout=8):
-                    pass
-            ok, err = post()
-        except Exception:
-            pass
+    _ensure_peers(workspace)
+    ok, err = False, None
+    for attempt in range(3):
+        ok, err = post()
+        if ok:
+            break
+        if err and "not found in workspace" in err:
+            _ensure_peers(workspace)   # never let the 404 path reach the endpoint again
+        if attempt < 2:
+            time.sleep(5 * (attempt + 1))
     return ok, err
 
 
@@ -420,7 +640,7 @@ def _mark_distilled(p, text):
         m = re.match(r"^---\n(.*?)\n---", text, re.S)
         if not m:
             return
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now().astimezone().isoformat()
         lines = m.group(1).splitlines()
         nl, has_d = [], False
         for l in lines:
@@ -437,6 +657,65 @@ def _mark_distilled(p, text):
         p.write_text(f"---\n" + "\n".join(nl) + f"\n---" + text[m.end():])
     except Exception:
         pass
+
+
+
+def _post_message(workspace, category, title, rel, points):
+    """Write the distilled knowledge as a MESSAGE as well as a conclusion.
+
+    Honcho builds a peer's representation — what the agent actually KNOWS — from
+    messages. Conclusions are inert memory atoms: searchable, never known. Writing only
+    a conclusion is how mined knowledge ends up sleeping. POST .../sessions/<id>/messages
+    auto-creates the session (verified 2026-09-26, HTTP 201). Returns (ok, err)."""
+    NL = chr(10)
+    content = (f"Vault knowledge — {title}" + NL + NL
+               + NL.join(f"- {p}" for p in points[:12])
+               + NL + NL + f"(source note: {rel})")
+    try:
+        payload = json.dumps({"messages": [{"peer_id": "hermes", "content": content[:4000]}]}).encode()
+        req = urllib.request.Request(
+            f"{HONCHO_BASE}/v3/workspaces/{workspace}/sessions/vault-{category}/messages",
+            data=payload,
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {HONCHO_KEY}"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            return resp.status in (200, 201), None
+    except urllib.error.HTTPError as e:
+        return False, e.read().decode()[:150]
+    except Exception as e:
+        return False, str(e)[:100]
+
+
+def _inject_key_points(p, points):
+    """Put the distilled points INTO the note, idempotently.
+
+    They previously existed only in {category}/youtube/_knowledge-index.md, so reaching
+    five facts cost a full 800-line transcript read. Never raises."""
+    try:
+        text = p.read_text()
+        NL = chr(10)
+        block = "## Key Points" + NL + NL + NL.join("- " + pt for pt in points) + NL + NL
+        if "## Key Points" in text:
+            keep, skipping = [], False
+            for ln in text.split(NL):
+                if ln.strip() == "## Key Points":
+                    skipping = True
+                    continue
+                if skipping and ln.startswith("## "):
+                    skipping = False
+                if not skipping:
+                    keep.append(ln)
+            text = NL.join(keep)
+        if "## Description" in text:
+            new = text.replace("## Description", block + "## Description", 1)
+        else:
+            new = text.rstrip() + NL + NL + block
+        if new != text:
+            p.write_text(new)
+        return True
+    except Exception:
+        return False
 
 
 def _distill_note(rel, category):
@@ -458,44 +737,18 @@ def _distill_note(rel, category):
         title = meta.get("title") or p.stem
         if not DEEPSEEK_KEY:
             return False, "no deepseek key"
-        prompt = (
-            "Extract 3-5 concise key points from this YouTube video.\n\n"
-            f"Title: {title}\nChannel: {meta.get('channel', '')}\n"
-            f"Description: {(meta.get('description') or '')[:1200]}\n\n"
-            f"Transcript excerpt:\n{body[:6000]}\n\n"
-            "Return ONLY the key points, one per line, starting with '- '. "
-            "No preamble, no headers, no commentary."
-        )
-        payload = json.dumps({
-            "model": DEEPSEEK_MODEL,
-            "messages": [
-                {"role": "system", "content": "You extract concise key points from video transcripts. Output plain bullet lines only."},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.2, "max_tokens": 500,
-        }).encode()
-        req = urllib.request.Request(
-            f"{DEEPSEEK_BASE}/chat/completions", data=payload,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_KEY}"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            data = json.loads(resp.read().decode())
-        out = (data["choices"][0]["message"]["content"] or "").strip()
-        points = []
-        for line in out.splitlines():
-            line = line.strip().lstrip("-*•").strip()
-            if line and len(line) > 8 and not line.lower().startswith(("key points", "here")):
-                points.append(line)
-            if len(points) >= 5:
-                break
+        points, derrs = _extract_points(title, meta.get("channel", ""),
+                                       meta.get("description", ""), body)
         if not points:
-            return False, "no points extracted"
+            return False, "no points extracted" + (f" ({'; '.join(derrs)})" if derrs else "")
         iok, ierr = _index_upsert(category, p.name, title, meta.get("date", ""), meta.get("channel", ""), points)
         workspace = CATEGORY_WORKSPACE_MAP.get(category, "hermes")
         hok, herr = _post_conclusion(workspace, title, rel, points)
-        _mark_distilled(p, text)
-        return True, f"{len(points)} points, index={'ok' if iok else ierr}, honcho={'ok' if hok else herr}"
+        _mark_distilled(p, text)        # rewrites the note from `text`: run FIRST
+        _inject_key_points(p, points)   # then put the points in the note body
+        mok, merr = _post_message(workspace, category, title, rel, points)
+        partial = f", {len(derrs)} section(s) failed ({'; '.join(derrs)})" if derrs else ""
+        return True, f"{len(points)} points, index={'ok' if iok else ierr}, honcho={'ok' if hok else herr}, msg={'ok' if mok else merr}{partial}"
     except Exception as e:
         return False, str(e)[:120]
 
@@ -558,7 +811,7 @@ def _update_note_frontmatter(full_path, category_id):
         return False, "unclosed"
     fm = content[3:fe]
     body = content[fe + 3:]
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now().astimezone().isoformat()
     lines = fm.split("\n")
     nl = []
     hc = hr = hu = False
@@ -785,7 +1038,7 @@ def api_vault():
                 entry["files"].append({
                     "path": str(fp).replace(str(vroot), "").lstrip("/"),
                     "title": fp.stem,
-                    "mtime": datetime.fromtimestamp(mt, timezone.utc).isoformat() if mt else "",
+                    "mtime": datetime.fromtimestamp(mt).astimezone().isoformat() if mt else "",
                 })
         except OSError:
             pass
@@ -1012,8 +1265,8 @@ def recategorize(item_id):
     ofp.unlink(missing_ok=True)
     item["category"] = nc
     item["path"] = dr
-    item["updated_at"] = datetime.now(timezone.utc).isoformat()
-    item["recategorized_at"] = datetime.now(timezone.utc).isoformat()
+    item["updated_at"] = datetime.now().astimezone().isoformat()
+    item["recategorized_at"] = datetime.now().astimezone().isoformat()
     _write_records_atomic(records)
     hok, herr = _update_honcho(item, nc)
     item["honcho_sync_status"] = "synced" if hok else "pending"

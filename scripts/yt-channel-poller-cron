@@ -1,0 +1,83 @@
+#!/bin/bash
+# yt-channel-poller-cron — Wrapper for running yt-channel-poller from cron
+# Handles logging, timestamps, and exit code capture.
+# Usage: yt-channel-poller-cron [channel_id]
+#   Without arg: polls all channels from config
+#   With arg: polls only the specified channel
+
+set -euo pipefail
+
+LOG_DIR="/var/log/yt-channel-poller"
+LOG_FILE="${LOG_DIR}/poll-$(date +%Y%m%d-%H%M%S).log"
+CONFIG="/etc/yt-channel-poller/config.json"
+CHANNEL="${1:-}"
+
+# Keep only last 30 log files (cleanup old ones)
+cleanup() {
+    local max_files=30
+    local count
+    count=$(ls -1 "${LOG_DIR}"/poll-*.log 2>/dev/null | wc -l)
+    if [ "$count" -gt "$max_files" ]; then
+        ls -1t "${LOG_DIR}"/poll-*.log | tail -n +$((max_files + 1)) | xargs rm -f
+    fi
+}
+
+exec > "${LOG_FILE}" 2>&1
+
+echo "========================================"
+echo "yt-channel-poller cron run"
+echo "Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "Config: ${CONFIG}"
+if [ -n "$CHANNEL" ]; then
+    echo "Channel: ${CHANNEL}"
+    CHANNEL_ARG="--channel ${CHANNEL}"
+else
+    echo "Channel: ALL"
+    CHANNEL_ARG=""
+fi
+echo "========================================"
+echo ""
+
+# Check config exists
+if [ ! -f "$CONFIG" ]; then
+    echo "ERROR: Config file not found at ${CONFIG}"
+    echo "Create it with api_key + channels (see yt-channel-poller --help)"
+    exit 1
+fi
+
+# Run the poller
+set +e
+/usr/local/bin/yt-channel-poller ${CHANNEL_ARG}
+EXIT_CODE=$?
+set -e
+
+echo ""
+echo "========================================"
+echo "Finished: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "Exit code: ${EXIT_CODE}"
+echo "Log: ${LOG_FILE}"
+echo "========================================"
+
+# Publish the result into the vault so the watchdog on .22 can read it as a local
+# file, instead of ssh-ing to a node and lxc-attaching into this container.
+STATUS_FILE="/mnt/obsidian-vault/.quarry/poller-status.json"
+mkdir -p "$(dirname "${STATUS_FILE}")" 2>/dev/null || true
+/usr/bin/python3 - "${STATUS_FILE}" "${EXIT_CODE}" "${LOG_FILE}" <<'PY' || true
+import json, sys, datetime
+path, code, log = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+try:
+    st = json.load(open(path))
+except Exception:
+    st = {}
+st["last_run_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+st["exit_code"] = code
+st["log"] = log
+st.setdefault("recent_failures", [])
+if code != 0:
+    st["recent_failures"] = (st.get("recent_failures") or [])[-4:] + [
+        {"ts": st["last_run_utc"], "exit_code": code, "log": log}]
+json.dump(st, open(path, "w"), indent=2)
+PY
+
+cleanup
+exit ${EXIT_CODE}

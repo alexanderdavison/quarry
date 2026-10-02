@@ -1,0 +1,445 @@
+#!/usr/bin/env python3
+"""
+yt-channel-poller - Poll YouTube channels for new videos and scrape them into Obsidian.
+
+Usage:
+    yt-channel-poller [--config PATH] [--channel CHANNEL_ID] [--backfill] [--dry-run]
+    yt-channel-poller --help
+
+The script reads a JSON config file with per-channel settings and a YouTube Data API
+key. For each channel (or a specific one with --channel), it fetches all uploads since
+the last poll timestamp and runs yt-to-obi on each new video, then updates the config.
+
+Configuration file format (default: /etc/yt-channel-poller/config.json):
+{
+    "api_key": "AIzaSy...",
+    "channels": {
+        "UC_x5XG1OV2P6uZZ5FSM9Ttw": {
+            "category": "sources",
+            "last_run": "2026-01-01T00:00:00Z"
+        }
+    }
+}
+
+YouTube Data API quotas:
+- channels.list: 1 unit per call
+- playlistItems.list: 1 unit per page (max 50 items/page)
+- Default daily quota: 10,000 units — this script uses ~2-4 units per channel per run.
+"""
+
+import argparse
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+DEFAULT_CONFIG = "/etc/yt-channel-poller/config.json"
+YT_TO_OBI = "/usr/local/bin/yt-to-obi"
+USER_AGENT = "yt-channel-poller/1.0 homelab"
+# Max results per API page (API max is 50)
+MAX_RESULTS = 50
+# Delay between yt-to-obi calls to avoid hammering
+CALL_DELAY = 2
+
+
+class YouTubeAPIError(Exception):
+    """Raised on YouTube Data API errors."""
+
+
+
+# --- v2: yt-dlp listing (no API key, no quota) -------------------------------
+
+YTDLP = "/opt/scraper-venv/bin/yt-dlp"
+LIST_LIMIT = 15          # recent uploads examined per channel per run
+MAX_NEW_PER_RUN = 3      # videos ingested per channel per run (keeps a first run sane)
+
+
+def _channel_url(spec):
+    """Accept an @handle, a full channel URL, or a UC... id."""
+    spec = (spec or "").strip()
+    if spec.startswith("http"):
+        return spec.rstrip("/") + "/videos"
+    if spec.startswith("@"):
+        return "https://www.youtube.com/" + spec + "/videos"
+    return "https://www.youtube.com/channel/" + spec + "/videos"
+
+
+def fetch_channel_videos_ytdlp(channel_spec, limit=LIST_LIMIT):
+    """List a channel's recent uploads (newest first) using yt-dlp.
+
+    Raises YouTubeAPIError with the underlying reason, so a bad channel id reads as
+    "this channel does not exist" instead of an opaque HTTP 400.
+    """
+    cmd = [YTDLP, "--flat-playlist", "--dump-json", "--no-warnings",
+           "--playlist-end", str(limit), _channel_url(channel_spec)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+    except subprocess.TimeoutExpired:
+        raise YouTubeAPIError("yt-dlp timed out listing " + channel_spec)
+    if r.returncode != 0:
+        lines = [l.strip() for l in (r.stderr or r.stdout or "").splitlines() if l.strip()]
+        raise YouTubeAPIError("yt-dlp could not list " + channel_spec + ": "
+                              + (lines[-1] if lines else "unknown error"))
+    vids = []
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        vid = d.get("id")
+        if not vid:
+            continue
+        vids.append({"video_id": vid,
+                     "title": d.get("title") or "",
+                     "published_at": d.get("upload_date") or ""})
+    return vids
+
+
+def _mark_seen(config, channel_id, channel_config, listed):
+    """Remember every listed id (bounded) so nothing is ingested twice."""
+    seen = set(channel_config.get("seen_ids") or [])
+    seen.update(v["video_id"] for v in listed)
+    channel_config["seen_ids"] = sorted(seen)[-200:]
+
+def api_get(url, retries=3):
+    """Make a GET request to the YouTube Data API with retry on 5xx."""
+    last_error = None
+    for attempt in range(retries):
+        try:
+            req = Request(url, headers={"User-Agent": USER_AGENT})
+            with urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode())
+        except Exception as e:
+            last_error = e
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
+    raise YouTubeAPIError(f"API request failed after {retries} retries: {last_error}")
+
+
+def get_uploads_playlist_id(api_key, channel_id):
+    """
+    Get a channel's uploads playlist ID.
+
+    Returns the uploads playlist ID (e.g. 'UU...') or None if the channel
+    has no uploads playlist.
+    """
+    parts = {"part": "contentDetails", "id": channel_id, "key": api_key}
+    url = f"https://www.googleapis.com/youtube/v3/channels?{urlencode(parts)}"
+    data = api_get(url)
+
+    items = data.get("items", [])
+    if not items:
+        return None
+    return items[0].get("contentDetails", {}).get("relatedPlaylists", {}).get("uploads")
+
+
+def fetch_playlist_videos(api_key, playlist_id, published_after=None):
+    """
+    Fetch all videos from a playlist, optionally filtering by publish date.
+
+    Returns a list of dicts: [{"video_id": "...", "title": "...", "published_at": "..."}]
+    Items are sorted oldest-first (the playlist order).
+    """
+    videos = []
+    page_token = None
+
+    while True:
+        parts = {
+            "part": "snippet",
+            "playlistId": playlist_id,
+            "maxResults": MAX_RESULTS,
+            "key": api_key,
+        }
+        if page_token:
+            parts["pageToken"] = page_token
+
+        url = f"https://www.googleapis.com/youtube/v3/playlistItems?{urlencode(parts)}"
+        data = api_get(url)
+
+        for item in data.get("items", []):
+            snippet = item.get("snippet", {})
+            # Skip deleted/private videos and non-video entries
+            if snippet.get("resourceId", {}).get("kind") != "youtube#video":
+                continue
+
+            published = snippet.get("publishedAt", "")
+            video_id = snippet.get("resourceId", {}).get("videoId", "")
+            title = snippet.get("title", "Untitled")
+
+            # Filter by publish date if specified
+            if published_after is not None and published:
+                pub_dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                if pub_dt <= published_after:
+                    # playlistItems are returned in reverse-chronological
+                    # (newest first), so once we hit one that's too old, stop
+                    return videos
+
+            videos.append({
+                "video_id": video_id,
+                "title": title,
+                "published_at": published,
+            })
+
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+
+    # playlistItems returns newest-first; we want oldest-first for processing
+    videos.reverse()
+    return videos
+
+
+def call_yt_to_obi(video_id, category, dry_run=False):
+    """
+    Call the yt-to-obi script for a single video.
+
+    Returns True on success, False on failure.
+    """
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    if dry_run:
+        print(f"  [DRY-RUN] Would run: {YT_TO_OBI} {url} {category}")
+        return True
+
+    # yt-to-obi must run as 'scraper' user (UID 1000, maps to host UID 1000)
+    # for NFS vault write access. Root (UID 0) maps to host UID 100000.
+    cmd = ["su", "-s", "/bin/bash", "-c",
+           f"{YT_TO_OBI} {shlex.quote(url)} {shlex.quote(category)}", "scraper"]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=240,
+        )
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            print(f"  OK: {output}")
+            return True
+        else:
+            stderr = result.stderr.strip() or "(no stderr)"
+            print(f"  FAIL (rc={result.returncode}): {stderr}")
+            return False
+    except subprocess.TimeoutExpired:
+        print(f"  FAIL (timeout after 120s): {url}")
+        return False
+    except FileNotFoundError:
+        print(f"  FAIL: yt-to-obi not found at {YT_TO_OBI}")
+        return False
+    except Exception as e:
+        print(f"  FAIL: {e}")
+        return False
+
+
+def load_config(config_path):
+    """Load and validate the config file."""
+    if not os.path.exists(config_path):
+        print(f"Config not found: {config_path}", file=sys.stderr)
+        print("Run with --help to see the expected format.", file=sys.stderr)
+        sys.exit(1)
+
+    with open(config_path) as f:
+        try:
+            config = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"Invalid JSON in config: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # v2: the YouTube Data API is no longer used (listing is yt-dlp), so a key is
+    # optional. Kept for backward compatibility with existing configs.
+    api_key = config.get("api_key") or ""
+
+    channels = config.get("channels", {})
+    if not channels:
+        print("Config must contain at least one entry in 'channels'", file=sys.stderr)
+        sys.exit(1)
+
+    return config, api_key, channels
+
+
+def save_config(config_path, config):
+    """Write config back to disk with updated timestamps."""
+    tmp_path = config_path + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(config, f, indent=2)
+    os.replace(tmp_path, config_path)
+
+
+def parse_timestamp(ts_str):
+    """Parse an ISO 8601 timestamp string, return datetime or None."""
+    if not ts_str:
+        return None
+    try:
+        return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def format_timestamp(dt):
+    """Format a datetime as ISO 8601 UTC."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def process_channel(config, api_key, channel_id, channel_config, backfill=False, dry_run=False):
+    """Process a single channel: fetch new videos and scrape them."""
+    category = channel_config.get("category", "sources")
+    last_run_str = channel_config.get("last_run", "")
+    last_run = None if backfill else parse_timestamp(last_run_str)
+
+    channel_display = channel_id
+    if channel_id.startswith("UC") and len(channel_id) > 10:
+        channel_display = f"{channel_id[:6]}...{channel_id[-4:]}"
+
+    print(f"\n{'='*60}")
+    print(f"Channel: {channel_id}")
+    print(f"Category: {category}")
+    print(f"Last run: {last_run_str or 'NEVER (backfill)'}")
+    if dry_run:
+        print(f"Mode: DRY RUN")
+
+    # List recent uploads with yt-dlp: no API key, no quota, @handles accepted.
+    try:
+        listed = fetch_channel_videos_ytdlp(channel_id)
+    except YouTubeAPIError as e:
+        print("  ERROR: {}".format(e))
+        return False
+
+    seen = set(channel_config.get("seen_ids") or [])
+    print("  Listed {} recent upload(s)".format(len(listed)))
+
+    if backfill:
+        videos = listed
+    else:
+        videos = [v for v in listed if v["video_id"] not in seen]
+        if len(videos) > MAX_NEW_PER_RUN:
+            print("  Capping at {} new video(s) this run".format(MAX_NEW_PER_RUN))
+            videos = videos[:MAX_NEW_PER_RUN]
+    print(f"  New videos found: {len(videos)}")
+
+    if not videos:
+        print(f"  Nothing to do.")
+        # Record what we saw so the next run does not re-scan it
+        if not dry_run:
+            _mark_seen(config, channel_id, channel_config, listed)
+            config["channels"][channel_id]["last_run"] = format_timestamp(datetime.now(timezone.utc))
+            return True
+        return True
+
+    # Process each video
+    success_count = 0
+    fail_count = 0
+    for i, video in enumerate(videos, 1):
+        vid = video["video_id"]
+        title = video["title"]
+        pub = video.get("published_at", "")
+        print(f"  [{i}/{len(videos)}] {pub[:10] if pub else '?'} {title[:60]}")
+
+        if call_yt_to_obi(vid, category, dry_run=dry_run):
+            success_count += 1
+        else:
+            fail_count += 1
+
+        # Brief pause between calls
+        if i < len(videos):
+            time.sleep(CALL_DELAY)
+
+    # Update last_run + seen ids so the next poll only picks up newer videos
+    if not dry_run:
+        _mark_seen(config, channel_id, channel_config, listed)
+        config["channels"][channel_id]["last_run"] = format_timestamp(datetime.now(timezone.utc))
+
+    print(f"\n  Result: {success_count} scraped, {fail_count} failed")
+    return fail_count == 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Poll YouTube channels and scrape new videos into Obsidian",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  yt-channel-poller                          # Poll all channels
+  yt-channel-poller --channel UC_XXXX        # Poll a specific channel
+  yt-channel-poller --backfill               # Re-scrape all videos (ignore last_run)
+  yt-channel-poller --dry-run                # Show what would be done, don't scrape
+  yt-channel-poller --config ./custom.json   # Use a different config file
+        """,
+    )
+    parser.add_argument(
+        "--config",
+        default=DEFAULT_CONFIG,
+        help=f"Config file path (default: {DEFAULT_CONFIG})",
+    )
+    parser.add_argument(
+        "--channel",
+        default=None,
+        help="Process only this channel ID (skip all others)",
+    )
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="Ignore last_run timestamps, scrape all videos",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be done without actually scraping",
+    )
+
+    args = parser.parse_args()
+
+    # Load config
+    config, api_key, channels = load_config(args.config)
+
+    # If --channel specified, only process that one
+    if args.channel:
+        if args.channel not in channels:
+            print(f"Channel '{args.channel}' not found in config.")
+            print(f"Known channels: {', '.join(channels.keys())}")
+            sys.exit(1)
+        target_channels = {args.channel: channels[args.channel]}
+    else:
+        target_channels = channels
+
+    # Process each channel
+    all_ok = True
+    for channel_id, channel_config in target_channels.items():
+        try:
+            ok = process_channel(
+                config, api_key, channel_id, channel_config,
+                backfill=args.backfill, dry_run=args.dry_run,
+            )
+            if not ok:
+                all_ok = False
+        except YouTubeAPIError as e:
+            print(f"\n  API ERROR for {channel_id}: {e}")
+            all_ok = False
+        except Exception as e:
+            print(f"\n  UNEXPECTED ERROR for {channel_id}: {e}")
+            all_ok = False
+
+    # Save updated config
+    if not args.dry_run:
+        save_config(args.config, config)
+
+    print(f"\n{'='*60}")
+    if args.dry_run:
+        print("Dry run complete. No changes made.")
+    elif all_ok:
+        print("All channels processed successfully.")
+    else:
+        print("Some channels had errors (see above).")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
